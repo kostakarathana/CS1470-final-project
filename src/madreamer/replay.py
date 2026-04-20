@@ -15,6 +15,7 @@ class Transition:
     next_observations: dict[str, np.ndarray]
     terminated: dict[str, bool]
     truncated: dict[str, bool]
+    infos: dict[str, dict[str, object]] | None = None
 
 
 class MultiAgentReplayBuffer:

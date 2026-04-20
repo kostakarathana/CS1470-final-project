@@ -14,6 +14,12 @@ class EnvConfig:
     grid_size: int = 5
     max_steps: int = 16
     task_type: str = "cooperative"
+    env_id: str = "PommeFFACompetition-v0"
+    board_size: int = 11
+    observability: str = "full"
+    communication: bool = False
+    board_value_count: int = 14
+    opponent_mode: str = "fixed"
 
 
 @dataclass
