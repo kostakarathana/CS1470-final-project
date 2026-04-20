@@ -1,34 +1,115 @@
 # CS1470 Final Project
 
-Research scaffold for a multi-agent Dreamer-style reinforcement learning project.
+Runnable research scaffold for multi-agent Dreamer-style reinforcement learning.
 
-The repository is organized around four experiment families:
+The repo currently supports:
 
-- `independent`: each agent has its own world model and policy/value heads
-- `shared`: agents share one world model but keep separate policy/value heads
-- `opponent_aware`: each agent has its own world model conditioned on other agents' actions
-- `ppo`: model-free baseline with one PPO-style policy/value network per agent
+- `mock_grid` end-to-end training and evaluation
+- bundled real Pommerman environment integration
+- PPO baseline training
+- Dreamer-lite training for `independent`, `shared`, and `opponent_aware`
+- terminal demo rendering for the toy environment
+- terminal board rendering for real Pommerman
 
-The current scaffold is intentionally lightweight. It provides:
-
-- config-driven experiment entrypoints
-- a common multi-agent environment interface
-- a tiny mock grid environment for smoke tests
-- module builders for the three world-model sharing strategies
-- replay buffer and rollout collection plumbing
-
-## Quick Start
+## Install
 
 ```bash
-python3 -m pip install -e ".[dev]"
-python3 -m madreamer.cli.train --config configs/shared.yaml --steps 32
-python3 -m pytest
+python3 -m pip install -e '.[dev]'
 ```
 
-## Recommended Build Order
+## Run
 
-1. Keep the mock grid environment working as the smoke-test target.
-2. Add a real Pommerman adapter behind the same `MultiAgentEnv` interface.
-3. Replace the placeholder world model with a Dreamer-style RSSM.
-4. Add actual imagination rollouts and actor/value optimization.
-5. Expand evaluation scripts and logging once training is stable.
+Terminal demo:
+
+```bash
+madreamer-demo --config configs/base.yaml --steps 8 --sleep 0.15
+```
+
+Short PPO training run:
+
+```bash
+madreamer-train --config configs/ppo.yaml --steps 64
+```
+
+Short Dreamer-style training run:
+
+```bash
+madreamer-train --config configs/shared.yaml --steps 64
+```
+
+Evaluation from a saved checkpoint:
+
+```bash
+madreamer-eval \
+  --config configs/shared.yaml \
+  --checkpoint artifacts/madreamer-shared-smoke/best.pt \
+  --episodes 4
+```
+
+Artifacts are written under `artifacts/<experiment_name>/` and include:
+
+- `best.pt`
+- `latest.pt`
+- `metrics.json`
+
+## Pommerman
+
+The repo includes a bundled upstream Pommerman source tree under `third_party/pommerman`, and the adapter prefers that copy automatically.
+
+If you want to override that with another checkout, you can still set `POMMERMAN_SOURCE_DIR`.
+
+Real Pommerman PPO training:
+
+```bash
+madreamer-train --config configs/pommerman_ppo.yaml --steps 64
+```
+
+Real Pommerman Dreamer-style training:
+
+```bash
+madreamer-train --config configs/pommerman_shared.yaml --steps 64
+```
+
+Real Pommerman terminal demo:
+
+```bash
+madreamer-demo --config configs/pommerman_shared.yaml --steps 8 --sleep 0.2
+```
+
+Real Pommerman animated GIF:
+
+```bash
+madreamer-demo \
+  --config configs/pommerman_shared.yaml \
+  --checkpoint artifacts/pommerman-shared/best.pt \
+  --steps 12 \
+  --sleep 0 \
+  --gif artifacts/pommerman-shared/demo.gif \
+  --fps 5 \
+  --open
+```
+
+Replay a trained real Pommerman Dreamer checkpoint:
+
+```bash
+madreamer-demo \
+  --config configs/pommerman_shared.yaml \
+  --checkpoint artifacts/pommerman-shared/best.pt \
+  --steps 12 \
+  --sleep 0.2
+```
+
+The adapter installs lightweight compatibility stubs for old `rapidjson`, network, and graphics imports so the upstream environment can run headless on modern Python.
+
+## Project Structure
+
+- `src/madreamer/envs/`: environment adapters
+- `src/madreamer/models/`: policy and world-model modules
+- `src/madreamer/trainers/`: PPO and Dreamer-lite trainers
+- `src/madreamer/cli/`: train, eval, and demo entrypoints
+- `configs/`: experiment presets
+- `tests/`: smoke and integration tests
+
+## Status
+
+This is a working research codebase with real PPO and real world-model training on Pommerman. The Dreamer path is still a compact Dreamer-style implementation rather than a line-by-line reproduction of DreamerV3, but it is no longer a toy mock pipeline.

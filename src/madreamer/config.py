@@ -38,6 +38,24 @@ class TrainingConfig:
     replay_capacity: int = 512
     learning_rate: float = 3e-4
     device: str = "cpu"
+    rollout_steps: int = 32
+    minibatch_size: int = 16
+    ppo_epochs: int = 4
+    gamma: float = 0.99
+    gae_lambda: float = 0.95
+    ppo_clip: float = 0.2
+    entropy_coef: float = 0.01
+    value_coef: float = 0.5
+    max_grad_norm: float = 0.5
+    world_model_batch_size: int = 16
+    world_model_updates: int = 4
+    actor_value_updates: int = 2
+    imagination_batch_size: int = 16
+    eval_episodes: int = 3
+    log_interval: int = 1
+    checkpoint_interval: int = 1
+    output_dir: str = "artifacts"
+    render_sleep: float = 0.15
 
 
 @dataclass

@@ -1,0 +1,4 @@
+[console_scripts]
+madreamer-demo = madreamer.cli.demo:main
+madreamer-eval = madreamer.cli.eval:main
+madreamer-train = madreamer.cli.train:main

@@ -103,3 +103,14 @@ class MockGridEnv:
         target_row, target_col = self._target
         obs[2, target_row, target_col] = 1.0
         return obs
+
+    def render_text(self, agent_id: str = "agent_0") -> str:
+        obs = self._make_observation(agent_id)
+        grid = [["." for _ in range(self.grid_size)] for _ in range(self.grid_size)]
+        for row, col in np.argwhere(obs[1] > 0.5):
+            grid[int(row)][int(col)] = "o"
+        for row, col in np.argwhere(obs[2] > 0.5):
+            grid[int(row)][int(col)] = "X"
+        for row, col in np.argwhere(obs[0] > 0.5):
+            grid[int(row)][int(col)] = "A"
+        return "\n".join(" ".join(row) for row in grid)

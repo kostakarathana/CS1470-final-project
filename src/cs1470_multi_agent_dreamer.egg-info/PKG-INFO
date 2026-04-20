@@ -1,0 +1,47 @@
+Metadata-Version: 2.4
+Name: cs1470-multi-agent-dreamer
+Version: 0.1.0
+Summary: Scaffold for multi-agent Dreamer experiments in PyTorch.
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>=1.26
+Requires-Dist: PyYAML>=6.0
+Requires-Dist: torch>=2.2
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: ruff>=0.4; extra == "dev"
+
+# CS1470 Final Project
+
+Research scaffold for a multi-agent Dreamer-style reinforcement learning project.
+
+The repository is organized around four experiment families:
+
+- `independent`: each agent has its own world model and policy/value heads
+- `shared`: agents share one world model but keep separate policy/value heads
+- `opponent_aware`: each agent has its own world model conditioned on other agents' actions
+- `ppo`: model-free baseline with one PPO-style policy/value network per agent
+
+The current scaffold is intentionally lightweight. It provides:
+
+- config-driven experiment entrypoints
+- a common multi-agent environment interface
+- a tiny mock grid environment for smoke tests
+- module builders for the three world-model sharing strategies
+- replay buffer and rollout collection plumbing
+
+## Quick Start
+
+```bash
+python3 -m pip install -e ".[dev]"
+python3 -m madreamer.cli.train --config configs/shared.yaml --steps 32
+python3 -m pytest
+```
+
+## Recommended Build Order
+
+1. Keep the mock grid environment working as the smoke-test target.
+2. Add a real Pommerman adapter behind the same `MultiAgentEnv` interface.
+3. Replace the placeholder world model with a Dreamer-style RSSM.
+4. Add actual imagination rollouts and actor/value optimization.
+5. Expand evaluation scripts and logging once training is stable.

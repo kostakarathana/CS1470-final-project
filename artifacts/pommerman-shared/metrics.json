@@ -1,0 +1,11 @@
+[
+  {
+    "actor_loss": 0.13982269167900085,
+    "critic_loss": 0.008231698535382748,
+    "episodes": 0,
+    "eval_reward_mean": 1.0,
+    "eval_win_rate": 1.0,
+    "step": 8,
+    "world_model_loss": 0.7933022975921631
+  }
+]

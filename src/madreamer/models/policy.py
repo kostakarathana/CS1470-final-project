@@ -43,6 +43,8 @@ class CriticNetwork(nn.Module):
 class PPOPolicyOutput:
     action: Tensor
     value: Tensor
+    log_prob: Tensor
+    entropy: Tensor
 
 
 class PPONetwork(nn.Module):
@@ -58,8 +60,24 @@ class PPONetwork(nn.Module):
         self.actor = ActorNetwork(hidden_dim, hidden_dim, action_dim)
         self.critic = CriticNetwork(hidden_dim, hidden_dim)
 
-    def act(self, obs: Tensor) -> PPOPolicyOutput:
+    def _distribution_and_value(self, obs: Tensor) -> tuple[Categorical, Tensor]:
         encoded = self.encoder(obs.float())
-        action = self.actor.sample_action(encoded)
+        distribution = Categorical(logits=self.actor(encoded))
         value = self.critic(encoded)
-        return PPOPolicyOutput(action=action, value=value)
+        return distribution, value
+
+    def act(self, obs: Tensor, deterministic: bool = False) -> PPOPolicyOutput:
+        distribution, value = self._distribution_and_value(obs)
+        action = distribution.probs.argmax(dim=-1) if deterministic else distribution.sample()
+        return PPOPolicyOutput(
+            action=action,
+            value=value,
+            log_prob=distribution.log_prob(action),
+            entropy=distribution.entropy(),
+        )
+
+    def evaluate_actions(self, obs: Tensor, actions: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        distribution, value = self._distribution_and_value(obs)
+        log_prob = distribution.log_prob(actions.long())
+        entropy = distribution.entropy()
+        return log_prob, entropy, value

@@ -1,4 +1,4 @@
-from madreamer.trainers.dreamer import DreamerCollector
-from madreamer.trainers.ppo import PPOCollector
+from madreamer.trainers.dreamer import DreamerTrainer
+from madreamer.trainers.ppo import PPOTrainer
 
-__all__ = ["DreamerCollector", "PPOCollector"]
+__all__ = ["DreamerTrainer", "PPOTrainer"]

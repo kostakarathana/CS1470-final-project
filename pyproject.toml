@@ -23,6 +23,7 @@ dev = [
 [project.scripts]
 madreamer-train = "madreamer.cli.train:main"
 madreamer-eval = "madreamer.cli.eval:main"
+madreamer-demo = "madreamer.cli.demo:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

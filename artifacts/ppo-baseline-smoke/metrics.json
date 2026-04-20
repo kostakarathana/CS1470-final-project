@@ -1,0 +1,11 @@
+[
+  {
+    "entropy": 1.6080119013786316,
+    "episodes": 3,
+    "eval_reward_mean": 0.0,
+    "eval_win_rate": 0.5,
+    "policy_loss": -0.001575239934027195,
+    "step": 8,
+    "value_loss": 0.8875120878219604
+  }
+]

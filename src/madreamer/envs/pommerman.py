@@ -3,7 +3,12 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import importlib
+import json
+import os
+from pathlib import Path
+import sys
 from typing import Any, Protocol
+import types
 
 import numpy as np
 
@@ -89,6 +94,7 @@ class PommermanEnv:
         extra_channels = 2 if self.communication else 0
         self.observation_shape = (self.board_value_count + 6 + extra_channels, self.board_size, self.board_size)
         self.action_dim = 6
+        self.last_raw_observations: dict[str, Mapping[str, Any]] = {}
         self._backend = self._make_backend()
 
     def reset(self, seed: int | None = None) -> ObservationDict:
@@ -98,6 +104,7 @@ class PommermanEnv:
         else:
             raw_observations = result
         observations_by_agent = _normalize_observation_batch(raw_observations, self.agent_ids)
+        self.last_raw_observations = observations_by_agent
         return {
             agent_id: encode_pommerman_observation(
                 observations_by_agent[agent_id],
@@ -112,6 +119,7 @@ class PommermanEnv:
         backend_actions = [self._normalize_action(actions[agent_id]) for agent_id in self.agent_ids]
         result = self._backend.step(backend_actions)
         raw_observations, rewards, terminated, truncated, infos = _normalize_step_output(result, self.agent_ids)
+        self.last_raw_observations = raw_observations
         observations = {
             agent_id: encode_pommerman_observation(
                 raw_observations[agent_id],
@@ -137,6 +145,31 @@ class PommermanEnv:
         if callable(close):
             close()
 
+    def render_text(self, agent_id: str = "agent_0") -> str:
+        if agent_id not in self.last_raw_observations:
+            return "<no Pommerman observation loaded>"
+        board = np.asarray(self.last_raw_observations[agent_id]["board"])
+        glyphs = {
+            0: ".",
+            1: "#",
+            2: "+",
+            3: "B",
+            4: "*",
+            5: "?",
+            6: "b",
+            7: "r",
+            8: "k",
+            9: "d",
+            10: "0",
+            11: "1",
+            12: "2",
+            13: "3",
+        }
+        rows = []
+        for row in board:
+            rows.append(" ".join(glyphs.get(int(value), str(int(value))) for value in row))
+        return "\n".join(rows)
+
     def _make_backend(self) -> PommermanBackend:
         if self.backend_factory is not None:
             return self.backend_factory(self)
@@ -154,12 +187,24 @@ class PommermanEnv:
 
 
 def _default_pommerman_backend(env_id: str, num_agents: int) -> PommermanBackend:
+    _install_rapidjson_stub()
+    _install_pommerman_headless_stubs()
+    source_dir = os.getenv("POMMERMAN_SOURCE_DIR")
+    search_roots = []
+    if source_dir:
+        search_roots.append(Path(source_dir))
+    bundled_root = Path(__file__).resolve().parents[3] / "third_party"
+    if bundled_root.exists():
+        search_roots.append(bundled_root)
+    for source_path in search_roots:
+        if source_path.exists() and str(source_path) not in sys.path:
+            sys.path.insert(0, str(source_path))
     try:
         pommerman = importlib.import_module("pommerman")
         agents = importlib.import_module("pommerman.agents")
     except ModuleNotFoundError as exc:
         raise ModuleNotFoundError(
-            "Pommerman is not installed. Install the `pommerman` package or pass a backend_factory to PommermanEnv."
+            "Pommerman is not installed. Install the package, or set POMMERMAN_SOURCE_DIR to an upstream checkout, or pass a backend_factory to PommermanEnv."
         ) from exc
 
     make = getattr(pommerman, "make", None)
@@ -174,6 +219,57 @@ def _default_pommerman_backend(env_id: str, num_agents: int) -> PommermanBackend
 
     agent_list = [agent_ctor() for _ in range(num_agents)]
     return make(env_id, agent_list)
+
+
+def _install_rapidjson_stub() -> None:
+    if "rapidjson" in sys.modules:
+        return
+    module = types.ModuleType("rapidjson")
+    module.dumps = lambda obj, *args, **kwargs: json.dumps(obj, *args, **kwargs)
+    module.loads = lambda value, *args, **kwargs: json.loads(value, *args, **kwargs)
+    module.dump = lambda obj, fp, *args, **kwargs: json.dump(obj, fp, *args, **kwargs)
+    module.load = lambda fp, *args, **kwargs: json.load(fp, *args, **kwargs)
+    sys.modules["rapidjson"] = module
+
+
+def _install_pommerman_headless_stubs() -> None:
+    if "pommerman.graphics" not in sys.modules:
+        graphics_module = types.ModuleType("pommerman.graphics")
+
+        class _NoopViewer:
+            def __init__(self, *args, **kwargs) -> None:
+                self.window = types.SimpleNamespace(push_handlers=lambda *a, **k: None)
+
+            def set_board(self, *args, **kwargs) -> None:
+                return None
+
+            def set_agents(self, *args, **kwargs) -> None:
+                return None
+
+            def set_step(self, *args, **kwargs) -> None:
+                return None
+
+            def set_bombs(self, *args, **kwargs) -> None:
+                return None
+
+            def render(self, *args, **kwargs) -> None:
+                return None
+
+            def close(self) -> None:
+                return None
+
+        class _PixelViewer(_NoopViewer):
+            @staticmethod
+            def rgb_array(*args, **kwargs):
+                return np.zeros((1, 64, 64, 3), dtype=np.uint8)
+
+        graphics_module.PixelViewer = _PixelViewer
+        graphics_module.PommeViewer = _NoopViewer
+        sys.modules["pommerman.graphics"] = graphics_module
+
+    for module_name in ("pommerman.network", "pommerman.cli"):
+        if module_name not in sys.modules:
+            sys.modules[module_name] = types.ModuleType(module_name)
 
 
 def _call_reset(backend: PommermanBackend, seed: int | None) -> Any:

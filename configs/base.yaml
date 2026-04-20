@@ -18,3 +18,5 @@ training:
   replay_capacity: 512
   learning_rate: 0.0003
   device: "cpu"
+  rollout_steps: 16
+  eval_episodes: 2

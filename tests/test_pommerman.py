@@ -123,3 +123,16 @@ def test_build_env_selects_pommerman_adapter() -> None:
 
     assert isinstance(env, PommermanEnv)
     assert env.observation_shape == (20, 11, 11)
+
+
+def test_real_pommerman_env_reset_and_step() -> None:
+    config_path = Path(__file__).resolve().parents[1] / "configs" / "pommerman_phase1.yaml"
+    cfg = load_experiment_config(config_path)
+    env = build_env(cfg)
+
+    observations = env.reset(seed=0)
+    assert observations["agent_0"].shape == (20, 11, 11)
+
+    step = env.step({agent_id: 0 for agent_id in env.agent_ids})
+    assert set(step.rewards) == set(env.agent_ids)
+    assert "raw_observation" in step.infos["agent_0"]
