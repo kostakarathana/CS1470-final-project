@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import importlib
 from typing import Any, Protocol
 
 import numpy as np
 
-from madreamer.envs.base import ActionDict, InfoDict, ObservationDict, StepResult
+from madreamer.envs.base import ActionDict, EventDict, InfoDict, ObservationDict, StepResult
+
+WOOD_TILE = 2
+POWERUP_TILES = {6, 7, 8}
+AGENT_BOARD_BASE = 10
+POMMERMAN_ACTION_DIM = 6
 
 
 class PommermanBackend(Protocol):
@@ -30,7 +35,6 @@ def encode_pommerman_observation(
 ) -> np.ndarray:
     board = _coerce_board(observation["board"], board_size).astype(np.int64, copy=False)
     board_planes = _one_hot_board(board, board_value_count)
-
     bomb_blast_strength = _coerce_board(
         observation.get("bomb_blast_strength", np.zeros_like(board)),
         board_size,
@@ -39,7 +43,6 @@ def encode_pommerman_observation(
         observation.get("bomb_life", np.zeros_like(board)),
         board_size,
     ).astype(np.float32, copy=False)
-
     feature_planes = [
         board_planes,
         bomb_blast_strength[None] / max(1.0, float(board_size)),
@@ -51,13 +54,8 @@ def encode_pommerman_observation(
             float(observation.get("blast_strength", 0)) / 10.0,
             dtype=np.float32,
         ),
-        np.full(
-            (1, board_size, board_size),
-            float(observation.get("can_kick", 0)),
-            dtype=np.float32,
-        ),
+        np.full((1, board_size, board_size), float(observation.get("can_kick", 0)), dtype=np.float32),
     ]
-
     if communication:
         message = observation.get("message", (0, 0))
         if len(message) != 2:
@@ -68,12 +66,86 @@ def encode_pommerman_observation(
                 np.full((1, board_size, board_size), float(message[1]) / 8.0, dtype=np.float32),
             ]
         )
-
     return np.concatenate(feature_planes, axis=0).astype(np.float32, copy=False)
+
+
+def extract_pommerman_events(
+    previous_observations: dict[str, Mapping[str, Any]],
+    next_observations: dict[str, Mapping[str, Any]],
+    raw_rewards: dict[str, float],
+    terminated: dict[str, bool],
+    truncated: dict[str, bool],
+    *,
+    agent_ids: tuple[str, ...],
+    board_size: int,
+    mode: str,
+) -> tuple[EventDict, dict[str, bool]]:
+    board_before = _coerce_board(previous_observations[agent_ids[0]]["board"], board_size)
+    board_after = _coerce_board(next_observations[agent_ids[0]]["board"], board_size)
+    alive_before = _alive_from_board(board_before, agent_ids)
+    alive_after = _alive_from_board(board_after, agent_ids)
+    destroyed_wood = float(np.logical_and(board_before == WOOD_TILE, board_after != WOOD_TILE).sum())
+    any_positive_terminal_reward = any(reward > 0.0 for reward in raw_rewards.values())
+    tied = all(truncated.values()) or (all(terminated.values()) and not any_positive_terminal_reward)
+    events: EventDict = {}
+    for agent_id in agent_ids:
+        next_position = tuple(int(value) for value in next_observations[agent_id].get("position", (0, 0)))
+        powerup_pickups = float(board_before[next_position] in POWERUP_TILES)
+        enemy_eliminations = float(
+            sum(
+                1
+                for other_id in agent_ids
+                if other_id != agent_id
+                and _is_enemy(agent_id, other_id, mode)
+                and alive_before[other_id]
+                and not alive_after[other_id]
+            )
+        )
+        events[agent_id] = {
+            "wood_destroyed": destroyed_wood,
+            "powerup_pickups": powerup_pickups,
+            "enemy_eliminations": enemy_eliminations,
+            "won": float((terminated[agent_id] or truncated[agent_id]) and raw_rewards[agent_id] > 0.0),
+            "lost": float((terminated[agent_id] or truncated[agent_id]) and raw_rewards[agent_id] < 0.0),
+            "tied": float((terminated[agent_id] or truncated[agent_id]) and tied),
+        }
+    return events, alive_after
+
+
+def shape_pommerman_rewards(
+    raw_rewards: dict[str, float],
+    events: EventDict,
+    terminated: dict[str, bool],
+    truncated: dict[str, bool],
+    *,
+    reward_preset: str,
+) -> dict[str, float]:
+    if reward_preset == "sparse":
+        return {
+            agent_id: raw_rewards[agent_id] if terminated[agent_id] or truncated[agent_id] else 0.0
+            for agent_id in raw_rewards
+        }
+    if reward_preset != "shaped":
+        raise ValueError(f"Unsupported reward preset '{reward_preset}'.")
+    shaped: dict[str, float] = {}
+    for agent_id, reward in raw_rewards.items():
+        event = events[agent_id]
+        shaped[agent_id] = (
+            1.0 * event["won"]
+            - 1.0 * event["lost"]
+            + 0.02 * event["wood_destroyed"]
+            + 0.05 * event["powerup_pickups"]
+            + 0.2 * event["enemy_eliminations"]
+            + 0.0 * event["tied"]
+        )
+        if not (terminated[agent_id] or truncated[agent_id]):
+            shaped[agent_id] += 0.0 * reward
+    return shaped
 
 
 @dataclass
 class PommermanEnv:
+    mode: str = "ffa"
     num_agents: int = 4
     env_id: str = "PommeFFACompetition-v0"
     board_size: int = 11
@@ -81,37 +153,63 @@ class PommermanEnv:
     observability: str = "full"
     communication: bool = False
     board_value_count: int = 14
-    opponent_mode: str = "fixed"
+    reward_preset: str = "sparse"
     backend_factory: Callable[["PommermanEnv"], PommermanBackend] | None = None
+    last_infos: InfoDict = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         self.agent_ids = tuple(f"agent_{index}" for index in range(self.num_agents))
         extra_channels = 2 if self.communication else 0
         self.observation_shape = (self.board_value_count + 6 + extra_channels, self.board_size, self.board_size)
-        self.action_dim = 6
+        self.action_dim = POMMERMAN_ACTION_DIM
         self._backend = self._make_backend()
+        self._last_raw_observations: dict[str, Mapping[str, Any]] = {}
 
     def reset(self, seed: int | None = None) -> ObservationDict:
         result = _call_reset(self._backend, seed)
         if isinstance(result, tuple) and len(result) == 2 and _looks_like_observation_batch(result[0]):
-            raw_observations, _ = result
+            raw_observations, infos = result
         else:
-            raw_observations = result
-        observations_by_agent = _normalize_observation_batch(raw_observations, self.agent_ids)
-        return {
+            raw_observations, infos = result, {}
+        normalized_raw_observations = _normalize_observation_batch(raw_observations, self.agent_ids)
+        observations = {
             agent_id: encode_pommerman_observation(
-                observations_by_agent[agent_id],
+                normalized_raw_observations[agent_id],
                 board_size=self.board_size,
                 board_value_count=self.board_value_count,
                 communication=self.communication,
             )
             for agent_id in self.agent_ids
         }
+        self._last_raw_observations = normalized_raw_observations
+        self.last_infos = _normalize_info_batch(infos, self.agent_ids)
+        for agent_id in self.agent_ids:
+            self.last_infos.setdefault(agent_id, {})
+            self.last_infos[agent_id]["raw_observation"] = normalized_raw_observations[agent_id]
+        return observations
 
     def step(self, actions: ActionDict) -> StepResult:
+        previous_observations = self._last_raw_observations
         backend_actions = [self._normalize_action(actions[agent_id]) for agent_id in self.agent_ids]
         result = self._backend.step(backend_actions)
-        raw_observations, rewards, terminated, truncated, infos = _normalize_step_output(result, self.agent_ids)
+        raw_observations, raw_rewards, terminated, truncated, infos = _normalize_step_output(result, self.agent_ids)
+        events, alive = extract_pommerman_events(
+            previous_observations,
+            raw_observations,
+            raw_rewards,
+            terminated,
+            truncated,
+            agent_ids=self.agent_ids,
+            board_size=self.board_size,
+            mode=self.mode,
+        )
+        rewards = shape_pommerman_rewards(
+            raw_rewards,
+            events,
+            terminated,
+            truncated,
+            reward_preset=self.reward_preset,
+        )
         observations = {
             agent_id: encode_pommerman_observation(
                 raw_observations[agent_id],
@@ -124,12 +222,18 @@ class PommermanEnv:
         info_by_agent = _normalize_info_batch(infos, self.agent_ids)
         for agent_id in self.agent_ids:
             info_by_agent[agent_id]["raw_observation"] = raw_observations[agent_id]
+            info_by_agent[agent_id]["alive"] = alive[agent_id]
+        self.last_infos = info_by_agent
+        self._last_raw_observations = raw_observations
         return StepResult(
             observations=observations,
             rewards=rewards,
+            raw_rewards=raw_rewards,
             terminated=terminated,
             truncated=truncated,
+            alive=alive,
             infos=info_by_agent,
+            events=events,
         )
 
     def close(self) -> None:
@@ -152,6 +256,9 @@ class PommermanEnv:
             raise ValueError("Pommerman actions must be an int or a 3-tuple when communication is enabled.")
         return int(action)
 
+    def raw_observation(self, agent_id: str) -> Mapping[str, Any]:
+        return self._last_raw_observations[agent_id]
+
 
 def _default_pommerman_backend(env_id: str, num_agents: int) -> PommermanBackend:
     try:
@@ -159,21 +266,15 @@ def _default_pommerman_backend(env_id: str, num_agents: int) -> PommermanBackend
         agents = importlib.import_module("pommerman.agents")
     except ModuleNotFoundError as exc:
         raise ModuleNotFoundError(
-            "Pommerman is not installed. Install the `pommerman` package or pass a backend_factory to PommermanEnv."
+            "Pommerman is not installed. Install the official playground package or provide a backend_factory."
         ) from exc
-
     make = getattr(pommerman, "make", None)
     if make is None:
         raise RuntimeError("Installed pommerman package does not expose pommerman.make.")
-
     agent_ctor = getattr(agents, "SimpleAgent", None) or getattr(agents, "RandomAgent", None)
     if agent_ctor is None:
-        raise RuntimeError(
-            "Installed pommerman package does not expose SimpleAgent or RandomAgent constructors."
-        )
-
-    agent_list = [agent_ctor() for _ in range(num_agents)]
-    return make(env_id, agent_list)
+        raise RuntimeError("Installed pommerman package does not expose SimpleAgent or RandomAgent constructors.")
+    return make(env_id, [agent_ctor() for _ in range(num_agents)])
 
 
 def _call_reset(backend: PommermanBackend, seed: int | None) -> Any:
@@ -239,7 +340,6 @@ def _normalize_step_output(
         truncated = _coerce_done_flags(truncated_raw, agent_ids)
     else:
         raise ValueError("Pommerman backend step output must have 4 or 5 elements.")
-
     return (
         _normalize_observation_batch(observations, agent_ids),
         _coerce_reward_dict(rewards, agent_ids),
@@ -281,3 +381,21 @@ def _normalize_info_batch(infos: Any, agent_ids: tuple[str, ...]) -> InfoDict:
             normalized[agent_id] = dict(value) if isinstance(value, Mapping) else {"value": value}
         return normalized
     return {agent_id: {"shared_info": infos} for agent_id in agent_ids}
+
+
+def _alive_from_board(board: np.ndarray, agent_ids: tuple[str, ...]) -> dict[str, bool]:
+    return {
+        agent_id: bool(np.any(board == _agent_board_value(agent_id)))
+        for agent_id in agent_ids
+    }
+
+
+def _agent_board_value(agent_id: str) -> int:
+    return AGENT_BOARD_BASE + int(agent_id.split("_")[-1])
+
+
+def _is_enemy(agent_id: str, other_id: str, mode: str) -> bool:
+    if mode == "ffa":
+        return agent_id != other_id
+    team_map = {"agent_0": "agent_3", "agent_3": "agent_0", "agent_1": "agent_2", "agent_2": "agent_1"}
+    return other_id not in {agent_id, team_map.get(agent_id)}

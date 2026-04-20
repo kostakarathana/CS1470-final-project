@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from madreamer.envs.base import MultiAgentEnv
-from madreamer.replay import MultiAgentReplayBuffer, Transition
+from madreamer.replay import MultiAgentReplayBuffer, ReplayStep, build_opponent_context
 
 PolicyFn = Callable[[str, np.ndarray, dict[str, object]], int]
 
@@ -25,12 +25,13 @@ def collect_episode(
     replay: MultiAgentReplayBuffer | None = None,
     seed: int | None = None,
     max_steps: int | None = None,
+    episode_id: int = 0,
 ) -> EpisodeSummary:
     observations = env.reset(seed=seed)
     steps = 0
     done = False
     total_rewards = {agent_id: 0.0 for agent_id in env.agent_ids}
-    infos = {agent_id: {} for agent_id in env.agent_ids}
+    infos = env.last_infos
 
     while not done and (max_steps is None or steps < max_steps):
         actions = {
@@ -40,16 +41,30 @@ def collect_episode(
         step = env.step(actions)
         if replay is not None:
             replay.add(
-                Transition(
+                ReplayStep(
+                    episode_id=episode_id,
                     observations={agent_id: obs.copy() for agent_id, obs in observations.items()},
                     actions=actions.copy(),
+                    opponent_actions={
+                        agent_id: build_opponent_context(
+                            agent_id,
+                            env.agent_ids,
+                            actions,
+                            step.alive,
+                            env.action_dim,
+                        )
+                        for agent_id in env.agent_ids
+                    },
                     rewards=step.rewards.copy(),
+                    raw_rewards=step.raw_rewards.copy(),
                     next_observations={
                         agent_id: obs.copy() for agent_id, obs in step.observations.items()
                     },
                     terminated=step.terminated.copy(),
                     truncated=step.truncated.copy(),
+                    alive=step.alive.copy(),
                     infos={agent_id: dict(info) for agent_id, info in step.infos.items()},
+                    events={agent_id: dict(event) for agent_id, event in step.events.items()},
                 )
             )
         for agent_id, reward in step.rewards.items():

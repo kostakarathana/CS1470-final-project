@@ -4,7 +4,7 @@ env:
   name: "pommerman"
   mode: "ffa"
   num_agents: 4
-  max_steps: 12
+  max_steps: 10
   board_size: 11
   observability: "full"
   communication: false

@@ -1,6 +1,6 @@
 # CS1470 Final Project
 
-Research scaffold for a multi-agent Dreamer-style reinforcement learning project.
+PyTorch research codebase for proposal-faithful multi-agent Dreamer and PPO experiments in Pommerman.
 
 The repository is organized around four experiment families:
 
@@ -9,26 +9,27 @@ The repository is organized around four experiment families:
 - `opponent_aware`: each agent has its own world model conditioned on other agents' actions
 - `ppo`: model-free baseline with one PPO-style policy/value network per agent
 
-The current scaffold is intentionally lightweight. It provides:
+The codebase now provides:
 
-- config-driven experiment entrypoints
-- a common multi-agent environment interface
-- a tiny mock grid environment for smoke tests
-- module builders for the three world-model sharing strategies
-- replay buffer and rollout collection plumbing
+- config-driven PPO and Dreamer-lite training entrypoints
+- a common multi-agent environment interface with reward presets
+- Pommerman FFA and Team adapters plus a tiny mock-grid smoke environment
+- sequence replay for recurrent world-model training
+- checkpointing, JSONL metric logging, evaluation, and analysis helpers
 
 ## Quick Start
 
 ```bash
-python3 -m pip install -e ".[dev]"
-python3 -m madreamer.cli.train --config configs/shared.yaml --steps 32
-python3 -m pytest
+./scripts/bootstrap_runtime.sh
+python3 -m madreamer.cli.train --config configs/ppo_smoke.yaml --steps 64
+python3 -m madreamer.cli.eval --config configs/shared_smoke.yaml --checkpoint artifacts/checkpoints/shared-smoke_shared_latest.pt
+pytest
 ```
 
-## Recommended Build Order
+Note: on this machine, the official playground install hits an upstream `python-rapidjson~=0.6.3` build failure on macOS/Python 3.10. The bootstrap script now reports that explicitly instead of failing silently.
 
-1. Keep the mock grid environment working as the smoke-test target.
-2. Add a real Pommerman adapter behind the same `MultiAgentEnv` interface.
-3. Replace the placeholder world model with a Dreamer-style RSSM.
-4. Add actual imagination rollouts and actor/value optimization.
-5. Expand evaluation scripts and logging once training is stable.
+## Config Families
+
+- `*_smoke.yaml`: tiny fake-backend friendly runs
+- `*_dev.yaml`: modest local runs for iteration
+- `*_study.yaml`: longer proposal-aligned Pommerman experiments

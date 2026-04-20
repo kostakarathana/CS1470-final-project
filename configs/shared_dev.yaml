@@ -1,10 +1,10 @@
 seed: 7
-experiment_name: "shared-smoke"
+experiment_name: "shared-dev"
 env:
   name: "pommerman"
   mode: "ffa"
   num_agents: 4
-  max_steps: 12
+  max_steps: 128
   board_size: 11
   observability: "full"
   communication: false
@@ -13,22 +13,22 @@ algorithm:
   name: "shared"
   learner_setup: "single_learner"
   opponent_policy: "simple"
-  reward_preset: "sparse"
+  reward_preset: "shaped"
   dreamer:
     latent_dim: 32
-    hidden_dim: 96
-    encoder_channels: 24
-    sequence_length: 3
-    replay_capacity: 128
-    batch_size: 2
-    warmup_steps: 4
-    updates_per_collect: 1
-    imagination_horizon: 3
+    hidden_dim: 128
+    encoder_channels: 32
+    sequence_length: 8
+    replay_capacity: 512
+    batch_size: 8
+    warmup_steps: 32
+    updates_per_collect: 2
+    imagination_horizon: 5
 training:
-  total_steps: 12
-  eval_interval_steps: 12
-  eval_episodes: 2
-  save_interval_steps: 12
+  total_steps: 512
+  eval_interval_steps: 128
+  eval_episodes: 4
+  save_interval_steps: 128
   device: "cpu"
   log_dir: "artifacts/logs"
   checkpoint_dir: "artifacts/checkpoints"
