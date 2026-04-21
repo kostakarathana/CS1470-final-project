@@ -1,19 +1,20 @@
 seed: 7
-experiment_name: "shared-smoke"
+experiment_name: "team-shared-smoke"
 env:
   name: "pommerman"
-  mode: "ffa"
+  mode: "team"
+  env_id: "PommeTeamCompetition-v0"
   num_agents: 4
-  max_steps: 12
+  max_steps: 10
   board_size: 11
-  observability: "full"
+  observability: "partial"
   communication: false
   board_value_count: 14
 algorithm:
   name: "shared"
-  learner_setup: "single_learner"
+  learner_setup: "multi_learner"
   opponent_policy: "simple"
-  reward_preset: "sparse"
+  reward_preset: "shaped"
   dreamer:
     latent_dim: 32
     hidden_dim: 96

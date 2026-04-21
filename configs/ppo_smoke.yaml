@@ -1,0 +1,26 @@
+seed: 7
+experiment_name: "ppo-smoke"
+env:
+  name: "mock_grid"
+  mode: "ffa"
+  num_agents: 4
+  grid_size: 5
+  max_steps: 10
+  task_type: "competitive"
+algorithm:
+  name: "ppo"
+  learner_setup: "single_learner"
+  opponent_policy: "simple"
+  reward_preset: "sparse"
+  ppo:
+    rollout_steps: 8
+    minibatch_size: 8
+    update_epochs: 2
+training:
+  total_steps: 24
+  eval_interval_steps: 24
+  eval_episodes: 2
+  save_interval_steps: 24
+  device: "cpu"
+  log_dir: "artifacts/logs"
+  checkpoint_dir: "artifacts/checkpoints"

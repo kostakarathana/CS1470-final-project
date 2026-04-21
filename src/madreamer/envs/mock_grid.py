@@ -4,15 +4,16 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from madreamer.envs.base import ActionDict, ObservationDict, StepResult
+from madreamer.envs.base import ActionDict, InfoDict, ObservationDict, StepResult
 
 
 @dataclass
 class MockGridEnv:
-    num_agents: int = 2
+    num_agents: int = 4
     grid_size: int = 5
     max_steps: int = 16
     task_type: str = "cooperative"
+    reward_preset: str = "sparse"
 
     def __post_init__(self) -> None:
         if self.num_agents < 2:
@@ -24,6 +25,7 @@ class MockGridEnv:
         self._target = (self.grid_size // 2, self.grid_size // 2)
         self._steps = 0
         self._positions: dict[str, tuple[int, int]] = {}
+        self.last_infos: InfoDict = {}
 
     def reset(self, seed: int | None = None) -> ObservationDict:
         if seed is not None:
@@ -41,42 +43,76 @@ class MockGridEnv:
                     taken.add(position)
                     self._positions[agent_id] = position
                     break
-        return {agent_id: self._make_observation(agent_id) for agent_id in self.agent_ids}
+        observations = {agent_id: self._make_observation(agent_id) for agent_id in self.agent_ids}
+        self.last_infos = {
+            agent_id: {
+                "position": self._positions[agent_id],
+                "target": self._target,
+                "step": self._steps,
+                "raw_observation": observations[agent_id].copy(),
+            }
+            for agent_id in self.agent_ids
+        }
+        return observations
 
     def step(self, actions: ActionDict) -> StepResult:
         self._steps += 1
         for agent_id, action in actions.items():
             self._positions[agent_id] = self._apply_action(self._positions[agent_id], action)
 
-        rewards = {agent_id: 0.0 for agent_id in self.agent_ids}
+        raw_rewards = {agent_id: 0.0 for agent_id in self.agent_ids}
         terminated = {agent_id: False for agent_id in self.agent_ids}
         truncated = {agent_id: self._steps >= self.max_steps for agent_id in self.agent_ids}
+        alive = {agent_id: True for agent_id in self.agent_ids}
+        events = {
+            agent_id: {
+                "wood_destroyed": 0.0,
+                "powerup_pickups": 0.0,
+                "enemy_eliminations": 0.0,
+                "won": 0.0,
+                "lost": 0.0,
+                "tied": 0.0,
+            }
+            for agent_id in self.agent_ids
+        }
 
         winners = [agent_id for agent_id, position in self._positions.items() if position == self._target]
         if winners:
             if self.task_type == "cooperative":
-                rewards = {agent_id: 1.0 for agent_id in self.agent_ids}
+                raw_rewards = {agent_id: 1.0 for agent_id in self.agent_ids}
             else:
-                rewards = {
+                raw_rewards = {
                     agent_id: (1.0 if agent_id in winners else -1.0) for agent_id in self.agent_ids
                 }
             terminated = {agent_id: True for agent_id in self.agent_ids}
+            for agent_id in self.agent_ids:
+                events[agent_id]["won"] = float(raw_rewards[agent_id] > 0.0)
+                events[agent_id]["lost"] = float(raw_rewards[agent_id] < 0.0)
+        elif all(truncated.values()):
+            for agent_id in self.agent_ids:
+                events[agent_id]["tied"] = 1.0
 
         observations = {agent_id: self._make_observation(agent_id) for agent_id in self.agent_ids}
-        infos = {
+        infos: InfoDict = {
             agent_id: {
                 "position": self._positions[agent_id],
                 "target": self._target,
                 "step": self._steps,
+                "raw_observation": observations[agent_id].copy(),
             }
             for agent_id in self.agent_ids
         }
+        rewards = self._shape_rewards(raw_rewards, events, terminated, truncated)
+        self.last_infos = infos
         return StepResult(
             observations=observations,
             rewards=rewards,
+            raw_rewards=raw_rewards,
             terminated=terminated,
             truncated=truncated,
+            alive=alive,
             infos=infos,
+            events=events,
         )
 
     def _apply_action(self, position: tuple[int, int], action: int) -> tuple[int, int]:
@@ -103,3 +139,24 @@ class MockGridEnv:
         target_row, target_col = self._target
         obs[2, target_row, target_col] = 1.0
         return obs
+
+    def close(self) -> None:
+        return None
+
+    def _shape_rewards(
+        self,
+        raw_rewards: dict[str, float],
+        events: dict[str, dict[str, float]],
+        terminated: dict[str, bool],
+        truncated: dict[str, bool],
+    ) -> dict[str, float]:
+        if self.reward_preset == "sparse":
+            return {
+                agent_id: raw_rewards[agent_id] if terminated[agent_id] or truncated[agent_id] else 0.0
+                for agent_id in self.agent_ids
+            }
+        shaped = {agent_id: 0.0 for agent_id in self.agent_ids}
+        for agent_id in self.agent_ids:
+            shaped[agent_id] += events[agent_id]["won"]
+            shaped[agent_id] -= events[agent_id]["lost"]
+        return shaped
