@@ -14,17 +14,181 @@ Creates:
 """
 
 import argparse
-import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
-from madreamer.builders import build_modules
+from madreamer.builders import ModuleBundle, build_modules, move_bundle_to_device
 from madreamer.config import load_experiment_config
 from madreamer.envs.factory import build_env
+from madreamer.models.world_model import RSSMState
+from madreamer.opponents import FixedOpponentManager
+from madreamer.replay import build_opponent_context
+
+
+@dataclass
+class PolicyController:
+    env: Any
+    cfg: Any
+    bundle: ModuleBundle | None
+    device: torch.device
+    controlled_agent_ids: tuple[str, ...]
+    opponents: FixedOpponentManager
+    world_states: dict[str, RSSMState] = field(default_factory=dict)
+    prev_actions: dict[str, int] = field(default_factory=dict)
+    prev_opponent_contexts: dict[str, np.ndarray] = field(default_factory=dict)
+
+    def reset_episode(self) -> None:
+        self.prev_actions = {agent_id: 0 for agent_id in self.env.agent_ids}
+        self.prev_opponent_contexts = {
+            agent_id: np.zeros(self._opponent_dim(agent_id), dtype=np.float32)
+            for agent_id in self.env.agent_ids
+        }
+        self.world_states = {}
+        if self.bundle is not None and self.cfg.algorithm.name != "ppo":
+            self.world_states = {
+                agent_id: self.bundle.world_models[agent_id].initial_state(1, self.device)
+                for agent_id in self.controlled_agent_ids
+            }
+
+    def actions(self, observations: dict[str, np.ndarray], infos: dict[str, dict[str, object]]) -> dict[str, int]:
+        actions = self.opponents.actions(observations, infos)
+        if self.bundle is None:
+            return actions
+        with torch.no_grad():
+            for agent_id in self.controlled_agent_ids:
+                obs_tensor = torch.as_tensor(observations[agent_id][None], device=self.device, dtype=torch.float32)
+                if self.cfg.algorithm.name == "ppo":
+                    output = self.bundle.ppo_policies[agent_id].act(obs_tensor, deterministic=True)
+                    actions[agent_id] = int(output.action.item())
+                    continue
+
+                world_model = self.bundle.world_models[agent_id]
+                prev_action = torch.as_tensor([self.prev_actions[agent_id]], device=self.device, dtype=torch.long)
+                opponent_context = self.prev_opponent_contexts[agent_id]
+                opponent_tensor = (
+                    torch.as_tensor(opponent_context[None], device=self.device, dtype=torch.float32)
+                    if world_model.opponent_action_dim
+                    else None
+                )
+                observed = world_model.observe(
+                    obs_tensor,
+                    prev_action,
+                    self.world_states[agent_id],
+                    opponent_tensor,
+                    deterministic=True,
+                )
+                self.world_states[agent_id] = _detach_state(observed.posterior_state)
+                actor_output = self.bundle.actors[agent_id].act(
+                    observed.posterior_state.features,
+                    deterministic=True,
+                )
+                actions[agent_id] = int(actor_output.action.item())
+        return actions
+
+    def after_step(self, actions: dict[str, int], alive: dict[str, bool]) -> None:
+        self.prev_actions = actions.copy()
+        self.prev_opponent_contexts = {
+            agent_id: build_opponent_context(
+                agent_id,
+                self.env.agent_ids,
+                actions,
+                alive,
+                self.env.action_dim,
+            )
+            for agent_id in self.env.agent_ids
+        }
+
+    def _opponent_dim(self, agent_id: str) -> int:
+        if self.bundle is None or self.cfg.algorithm.name == "ppo" or agent_id not in self.bundle.world_models:
+            return 0
+        return self.bundle.world_models[agent_id].opponent_action_dim
+
+
+def build_policy_controller(env: Any, cfg: Any, checkpoint: Path | None) -> PolicyController:
+    device = torch.device(cfg.training.device)
+    bundle: ModuleBundle | None = None
+    controlled_agent_ids: tuple[str, ...] = ()
+    if checkpoint is not None:
+        if not checkpoint.exists():
+            raise FileNotFoundError(checkpoint)
+        bundle = build_modules(
+            cfg,
+            env.agent_ids,
+            env.observation_shape,
+            env.action_dim,
+            cfg.env.board_value_count,
+        )
+        move_bundle_to_device(bundle, cfg.training.device)
+        _load_checkpoint_into_bundle(checkpoint, bundle, device)
+        _set_bundle_eval(bundle)
+        controlled_agent_ids = (
+            (env.agent_ids[0],)
+            if cfg.algorithm.learner_setup == "single_learner"
+            else env.agent_ids
+        )
+    controller = PolicyController(
+        env=env,
+        cfg=cfg,
+        bundle=bundle,
+        device=device,
+        controlled_agent_ids=controlled_agent_ids,
+        opponents=FixedOpponentManager(
+            env,
+            policy_name=cfg.algorithm.opponent_policy,
+            controlled_agent_ids=controlled_agent_ids,
+            seed=cfg.seed + 50_000,
+        ),
+    )
+    controller.reset_episode()
+    return controller
+
+
+def _load_checkpoint_into_bundle(path: Path, bundle: ModuleBundle, device: torch.device) -> None:
+    payload = torch.load(path, map_location=device)
+    state = payload.get("bundle", payload)
+    loaded = 0
+    for agent_id, state_dict in state.get("world_models", {}).items():
+        if agent_id in bundle.world_models:
+            bundle.world_models[agent_id].load_state_dict(state_dict)
+            loaded += 1
+    for agent_id, state_dict in state.get("actors", {}).items():
+        if agent_id in bundle.actors:
+            bundle.actors[agent_id].load_state_dict(state_dict)
+            loaded += 1
+    for agent_id, state_dict in state.get("critics", {}).items():
+        if agent_id in bundle.critics:
+            bundle.critics[agent_id].load_state_dict(state_dict)
+            loaded += 1
+    for agent_id, state_dict in state.get("ppo_policies", {}).items():
+        if agent_id in bundle.ppo_policies:
+            bundle.ppo_policies[agent_id].load_state_dict(state_dict)
+            loaded += 1
+    if loaded == 0:
+        raise ValueError(f"Checkpoint {path} did not contain any compatible module weights.")
+
+
+def _set_bundle_eval(bundle: ModuleBundle) -> None:
+    seen: set[int] = set()
+    for module_group in (bundle.world_models, bundle.actors, bundle.critics, bundle.ppo_policies):
+        for module in module_group.values():
+            if id(module) in seen:
+                continue
+            seen.add(id(module))
+            module.eval()
+
+
+def _detach_state(state: RSSMState) -> RSSMState:
+    return RSSMState(
+        deter=state.deter.detach(),
+        stoch=state.stoch.detach(),
+        mean=state.mean.detach(),
+        std=state.std.detach(),
+    )
 
 
 def render_board_state(
@@ -126,10 +290,11 @@ def render_board_state(
 
 def play_episode(
     env: Any,
-    bundle: dict[str, Any],
+    controller: PolicyController,
     cfg: Any,
     device: str,
     num_frames: int = 256,
+    seed: int | None = None,
 ) -> tuple[list[Image.Image], dict[str, list[float]]]:
     """
     Play one episode and record frames + metrics.
@@ -140,7 +305,9 @@ def play_episode(
     frames: list[Image.Image] = []
     metrics = {agent_id: [] for agent_id in env.agent_ids}
 
-    obs = env.reset()
+    obs = env.reset(seed=cfg.seed if seed is None else seed)
+    controller.reset_episode()
+    infos = env.last_infos
     done = {agent_id: False for agent_id in env.agent_ids}
     truncated = {agent_id: False for agent_id in env.agent_ids}
 
@@ -171,14 +338,15 @@ def play_episode(
         if all(done.values()) or all(truncated.values()):
             break
 
-        # Get actions: sample random actions [0, action_dim)
-        actions = {aid: int(np.random.randint(0, env.action_dim)) for aid in env.agent_ids}
+        actions = controller.actions(obs, infos)
 
         result = env.step(actions)
         obs = result.observations
+        infos = result.infos
         rewards = result.rewards
         done = result.terminated
         truncated = result.truncated
+        controller.after_step(actions, result.alive)
 
         # Record metrics
         for agent_id in env.agent_ids:
@@ -252,24 +420,18 @@ def main():
     print(f"Loading config from {args.config}")
     cfg = load_experiment_config(args.config)
 
-    print(f"Building environment...")
+    print("Building environment...")
     env = build_env(cfg)
 
     # Build modules if checkpoint exists (for trained agent)
     if args.checkpoint and args.checkpoint.exists():
         print(f"Loading checkpoint from {args.checkpoint}")
-        bundle = build_modules(
-            cfg,
-            env.agent_ids,
-            env.observation_shape,
-            env.action_dim,
-            cfg.env.board_value_count,
-        )
-        # Load checkpoint here (not implemented in this basic version)
-        # For now, we just run with random agents
+        controller = build_policy_controller(env, cfg, args.checkpoint)
+    elif args.checkpoint:
+        raise FileNotFoundError(args.checkpoint)
     else:
-        print("No checkpoint; using random agents")
-        bundle = None
+        print("No checkpoint; using configured scripted opponents for all agents")
+        controller = build_policy_controller(env, cfg, None)
 
     # Create output directory
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -280,7 +442,14 @@ def main():
 
     for ep in range(args.episodes):
         print(f"\nEpisode {ep + 1}/{args.episodes}...")
-        frames, metrics = play_episode(env, bundle, cfg, cfg.training.device, args.frames)
+        frames, metrics = play_episode(
+            env,
+            controller,
+            cfg,
+            cfg.training.device,
+            args.frames,
+            seed=cfg.seed + ep,
+        )
         all_frames.extend(frames)
         for agent_id in env.agent_ids:
             all_metrics[agent_id].extend(metrics[agent_id])

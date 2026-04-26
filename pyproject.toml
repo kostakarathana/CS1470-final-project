@@ -9,8 +9,11 @@ description = "Scaffold for multi-agent Dreamer experiments in PyTorch."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+  "gym>=0.10,<0.11",
+  "jsonmerge>=1.9",
   "numpy>=1.26",
   "PyYAML>=6.0",
+  "ruamel.yaml>=0.18",
   "torch>=2.2",
 ]
 
@@ -21,6 +24,7 @@ dev = [
 ]
 analysis = [
   "matplotlib>=3.8",
+  "Pillow>=10.0",
 ]
 
 [project.scripts]
@@ -36,3 +40,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+
+[tool.ruff]
+extend-exclude = ["third_party"]

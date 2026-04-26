@@ -96,6 +96,23 @@ def test_pommerman_env_adapter_reset_and_step() -> None:
     assert "wood_destroyed" in step.events["agent_0"]
 
 
+def test_pommerman_env_adapter_enforces_max_steps() -> None:
+    env = PommermanEnv(
+        num_agents=4,
+        board_size=11,
+        max_steps=1,
+        communication=False,
+        backend_factory=fake_backend_factory("ffa"),
+    )
+
+    env.reset(seed=123)
+    step = env.step({agent_id: 0 for agent_id in env.agent_ids})
+
+    assert step.done is True
+    assert all(step.truncated.values())
+    assert all(event["tied"] == 1.0 for event in step.events.values())
+
+
 def test_build_env_selects_pommerman_adapter() -> None:
     config_path = Path(__file__).resolve().parents[1] / "configs" / "shared_smoke.yaml"
     cfg = load_experiment_config(config_path)
@@ -103,3 +120,17 @@ def test_build_env_selects_pommerman_adapter() -> None:
 
     assert isinstance(env, PommermanEnv)
     assert env.observation_shape == (20, 11, 11)
+
+
+def test_bundled_pommerman_backend_reset_and_step() -> None:
+    config_path = Path(__file__).resolve().parents[1] / "configs" / "shared_smoke.yaml"
+    cfg = load_experiment_config(config_path)
+    env = build_env(cfg)
+
+    observations = env.reset(seed=0)
+    step = env.step({agent_id: 0 for agent_id in env.agent_ids})
+
+    assert observations["agent_0"].shape == env.observation_shape
+    assert set(step.raw_rewards) == set(env.agent_ids)
+    assert "raw_observation" in step.infos["agent_0"]
+    env.close()

@@ -16,16 +16,15 @@ Side-by-side visualization.
 
 import argparse
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import torch
 from PIL import Image, ImageDraw
 
-from madreamer.builders import build_modules
 from madreamer.config import load_experiment_config
 from madreamer.envs.factory import build_env
-from madreamer.envs.pommerman import encode_pommerman_observation
+from madreamer.replay import build_opponent_context
+from visualize_game import build_policy_controller
 
 
 def decode_observation(obs: torch.Tensor, board_size: int) -> dict[str, np.ndarray]:
@@ -40,6 +39,11 @@ def decode_observation(obs: torch.Tensor, board_size: int) -> dict[str, np.ndarr
     board_planes = obs_np[:14]  # Assuming 14 board value planes
     board = np.argmax(board_planes, axis=0)
     return {"board": board}
+
+
+def decode_board_logits(board_logits: torch.Tensor) -> np.ndarray:
+    """Decode world-model board logits into symbolic board values."""
+    return board_logits.argmax(dim=1)[0].detach().cpu().numpy().astype(np.int64)
 
 
 def render_side_by_side(
@@ -104,6 +108,22 @@ def render_side_by_side(
     return img
 
 
+def _positions_from_board(
+    board: np.ndarray,
+    agent_ids: tuple[str, ...],
+    fallback: dict[str, tuple[int, int]],
+) -> dict[str, tuple[int, int]]:
+    positions: dict[str, tuple[int, int]] = {}
+    for index, agent_id in enumerate(agent_ids):
+        matches = np.argwhere(board == 10 + index)
+        if len(matches):
+            row, col = matches[0]
+            positions[agent_id] = (int(row), int(col))
+        elif agent_id in fallback:
+            positions[agent_id] = fallback[agent_id]
+    return positions
+
+
 def main():
     parser = argparse.ArgumentParser(description="Visualize imagined rollouts vs real gameplay")
     parser.add_argument("--config", type=Path, default=Path("configs/final/shared_h3_ffa.yaml"))
@@ -119,63 +139,87 @@ def main():
 
     print(f"Loading config from {args.config}")
     cfg = load_experiment_config(args.config)
+    if cfg.algorithm.name == "ppo":
+        raise ValueError("Imagination visualization requires a Dreamer-style checkpoint, not PPO.")
 
-    print(f"Building environment and modules...")
+    print("Building environment and loading checkpoint...")
     env = build_env(cfg)
-    bundle = build_modules(
-        cfg,
-        env.agent_ids,
-        env.observation_shape,
-        env.action_dim,
-        cfg.env.board_value_count,
-    )
-
-    # Load checkpoint
-    print(f"Loading checkpoint: {args.checkpoint}")
-    checkpoint = torch.load(args.checkpoint, map_location=cfg.training.device)
-    if "modules" in checkpoint:
-        for module_name, state in checkpoint["modules"].items():
-            if module_name in bundle:
-                bundle[module_name].load_state_dict(state)
-    
+    controller = build_policy_controller(env, cfg, args.checkpoint)
+    if controller.bundle is None:
+        raise ValueError("No Dreamer bundle was loaded.")
     device = torch.device(cfg.training.device)
-    for module in bundle.values():
-        module.to(device)
-        module.eval()
 
     print("Running episode with imagination tracking...")
     frames: list[Image.Image] = []
 
-    obs = env.reset()
+    obs = env.reset(seed=cfg.seed)
+    controller.reset_episode()
+    infos = env.last_infos
     done = {aid: False for aid in env.agent_ids}
     truncated = {aid: False for aid in env.agent_ids}
+    selected_agent = controller.controlled_agent_ids[0]
 
     for step in range(args.frames):
         if all(done.values()) or all(truncated.values()):
             break
 
-        # Get real board state
-        raw_obs = {
+        raw_before = {
             aid: env.last_infos[aid]["raw_observation"]
             for aid in env.agent_ids
         }
-        real_board = raw_obs[env.agent_ids[0]]["board"]
-        real_positions = {aid: tuple(int(p) for p in raw_obs[aid]["position"]) for aid in env.agent_ids}
-
-        # For now, just show real board (full imagination requires trained model inference)
-        # TODO: Add world model inference here once checkpoint loading is verified
-        imagined_board = real_board.copy()  # Placeholder
-        imagined_positions = real_positions.copy()
-
-        frame = render_side_by_side(
-            real_board, imagined_board, real_positions, imagined_positions,
-            env.agent_ids, step, cell_size=30,
+        current_positions = {
+            aid: tuple(int(p) for p in raw_before[aid]["position"])
+            for aid in env.agent_ids
+        }
+        actions = controller.actions(obs, infos)
+        world_model = controller.bundle.world_models[selected_agent]
+        opponent_context = build_opponent_context(
+            selected_agent,
+            env.agent_ids,
+            actions,
+            {aid: bool(infos.get(aid, {}).get("alive", True)) for aid in env.agent_ids},
+            env.action_dim,
         )
-        frames.append(frame)
-
-        # Take a step
-        actions = {aid: int(np.random.randint(0, env.action_dim)) for aid in env.agent_ids}
+        opponent_tensor = (
+            torch.as_tensor(opponent_context[None], device=device, dtype=torch.float32)
+            if world_model.opponent_action_dim
+            else None
+        )
+        action_tensor = torch.as_tensor([actions[selected_agent]], device=device, dtype=torch.long)
+        with torch.no_grad():
+            imagined = world_model.imagine(
+                controller.world_states[selected_agent],
+                action_tensor,
+                opponent_tensor,
+                deterministic=True,
+            )
+            _, _, board_logits, _ = world_model.decode(imagined.next_state)
+            imagined_board = decode_board_logits(board_logits)
         result = env.step(actions)
+        controller.after_step(actions, result.alive)
+        raw_after = {
+            aid: result.infos[aid]["raw_observation"]
+            for aid in env.agent_ids
+        }
+        real_board = raw_after[selected_agent]["board"]
+        real_positions = {
+            aid: tuple(int(p) for p in raw_after[aid]["position"])
+            for aid in env.agent_ids
+        }
+        imagined_positions = _positions_from_board(imagined_board, env.agent_ids, current_positions)
+        frames.append(
+            render_side_by_side(
+                real_board,
+                imagined_board,
+                real_positions,
+                imagined_positions,
+                env.agent_ids,
+                step,
+                cell_size=30,
+            )
+        )
+        obs = result.observations
+        infos = result.infos
         done = result.terminated
         truncated = result.truncated
 

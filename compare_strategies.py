@@ -17,13 +17,13 @@ Side-by-side for direct visual comparison.
 
 import argparse
 from pathlib import Path
-from typing import Any
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 from madreamer.config import load_experiment_config
 from madreamer.envs.factory import build_env
+from visualize_game import build_policy_controller, play_episode
 
 
 def render_compact_board(
@@ -77,7 +77,8 @@ def render_compact_board(
 
 
 def create_strategy_grid(
-    configs: list[str],
+    configs: list[Path],
+    checkpoints: list[Path | None],
     titles: list[str],
     num_snapshots: int = 5,
 ) -> Image.Image:
@@ -87,36 +88,80 @@ def create_strategy_grid(
     """
     rows = len(configs)
     cols = num_snapshots
-    board_px = 11 * 25  # 11x11 board, 25px per cell
-    
-    # Create grid image
-    grid_img = Image.new("RGB", (board_px * cols + 50, board_px * rows + 100), color=(20, 20, 20))
+    snapshots_by_row: list[list[Image.Image]] = []
+    target_size = (275, 320)
+    for config_path, checkpoint_path in zip(configs, checkpoints, strict=True):
+        cfg = load_experiment_config(config_path)
+        env = build_env(cfg)
+        controller = build_policy_controller(env, cfg, checkpoint_path)
+        frames, _ = play_episode(env, controller, cfg, cfg.training.device, num_frames=max(8, cols * 8))
+        env.close()
+        indices = _sample_indices(len(frames), cols)
+        snapshots_by_row.append([frames[index].convert("RGB").resize(target_size) for index in indices])
+
+    title_height = 48
+    row_label_width = 190
+    col_header_height = 28
+    padding = 12
+    canvas_width = row_label_width + cols * target_size[0] + (cols + 1) * padding
+    canvas_height = title_height + col_header_height + rows * target_size[1] + (rows + 1) * padding
+    grid_img = Image.new("RGB", (canvas_width, canvas_height), color=(20, 20, 20))
     draw = ImageDraw.Draw(grid_img)
+    draw.text((padding, 14), "Strategy Comparison: Pommerman Gameplay Over Time", fill=(255, 255, 255))
 
-    # Title
-    draw.text((10, 10), "Strategy Comparison: Pommerman Gameplay Over Time", fill=(255, 255, 255))
-
-    # For now, draw placeholder
-    draw.text((10, 50), "(Requires trained models to populate with real gameplay)", fill=(150, 150, 150))
-    draw.text((10, 70), f"Expected: {rows} strategies × {cols} time steps", fill=(150, 150, 150))
-
+    for col in range(cols):
+        x = row_label_width + padding + col * (target_size[0] + padding)
+        draw.text((x + 6, title_height), f"snapshot {col + 1}", fill=(210, 210, 210))
+    for row, title in enumerate(titles):
+        y = title_height + col_header_height + padding + row * (target_size[1] + padding)
+        draw.text((padding, y + 8), title, fill=(255, 255, 255))
+        for col, image in enumerate(snapshots_by_row[row]):
+            x = row_label_width + padding + col * (target_size[0] + padding)
+            grid_img.paste(image, (x, y))
     return grid_img
+
+
+def _sample_indices(num_frames: int, count: int) -> list[int]:
+    if num_frames <= 0:
+        raise ValueError("Cannot sample snapshots from an empty episode.")
+    if count <= 1:
+        return [0]
+    return [int(round(value)) for value in np.linspace(0, num_frames - 1, count)]
+
+
+def _resolve_config(value: str) -> Path:
+    path = Path(value)
+    if path.exists():
+        return path
+    if path.suffix != ".yaml":
+        path = Path("configs/final") / f"{value}.yaml"
+    else:
+        path = Path("configs/final") / value
+    if not path.exists():
+        raise FileNotFoundError(path)
+    return path
 
 
 def main():
     parser = argparse.ArgumentParser(description="Compare strategies side-by-side")
-    parser.add_argument("--configs", type=str, nargs="+", required=True, help="Config names")
+    parser.add_argument("--configs", type=str, nargs="+", required=True, help="Config paths or final config names")
     parser.add_argument("--titles", type=str, nargs="+", help="Display titles")
     parser.add_argument("--checkpoints", type=Path, nargs="+", help="Checkpoint paths")
     parser.add_argument("--output", type=Path, default=Path("artifacts/strategy_comparison.png"))
     parser.add_argument("--snapshots", type=int, default=5, help="Time steps to snapshot")
     args = parser.parse_args()
 
+    configs = [_resolve_config(value) for value in args.configs]
     if args.titles is None:
-        args.titles = args.configs
+        args.titles = [path.stem for path in configs]
+    if len(args.titles) != len(configs):
+        raise ValueError("--titles must have the same length as --configs")
+    checkpoints = args.checkpoints or [None for _ in configs]
+    if len(checkpoints) != len(configs):
+        raise ValueError("--checkpoints must have the same length as --configs when provided")
 
-    print(f"Creating comparison grid for: {args.configs}")
-    grid = create_strategy_grid(args.configs, args.titles, args.snapshots)
+    print(f"Creating comparison grid for: {[str(path) for path in configs]}")
+    grid = create_strategy_grid(configs, checkpoints, args.titles, args.snapshots)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     grid.save(args.output)

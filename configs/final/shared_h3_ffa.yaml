@@ -1,0 +1,34 @@
+seed: 7
+experiment_name: "final-shared-h3-ffa"
+env:
+  name: "pommerman"
+  mode: "ffa"
+  num_agents: 4
+  max_steps: 256
+  board_size: 11
+  observability: "full"
+  communication: false
+  board_value_count: 14
+algorithm:
+  name: "shared"
+  learner_setup: "multi_learner"
+  opponent_policy: "simple"
+  reward_preset: "shaped"
+  dreamer:
+    latent_dim: 32
+    hidden_dim: 128
+    encoder_channels: 32
+    sequence_length: 8
+    replay_capacity: 1024
+    batch_size: 8
+    warmup_steps: 32
+    updates_per_collect: 2
+    imagination_horizon: 3
+training:
+  total_steps: 2048
+  eval_interval_steps: 256
+  eval_episodes: 8
+  save_interval_steps: 256
+  device: "cpu"
+  log_dir: "artifacts/final/shared-h3-ffa/logs"
+  checkpoint_dir: "artifacts/final/shared-h3-ffa/checkpoints"
