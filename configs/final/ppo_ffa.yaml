@@ -1,0 +1,28 @@
+seed: 7
+experiment_name: "final-ppo-ffa"
+env:
+  name: "pommerman"
+  mode: "ffa"
+  num_agents: 4
+  max_steps: 256
+  board_size: 11
+  observability: "full"
+  communication: false
+  board_value_count: 14
+algorithm:
+  name: "ppo"
+  learner_setup: "single_learner"
+  opponent_policy: "simple"
+  reward_preset: "shaped"
+  ppo:
+    rollout_steps: 64
+    minibatch_size: 32
+    update_epochs: 4
+training:
+  total_steps: 2048
+  eval_interval_steps: 256
+  eval_episodes: 8
+  save_interval_steps: 256
+  device: "cpu"
+  log_dir: "artifacts/final/ppo-ffa/logs"
+  checkpoint_dir: "artifacts/final/ppo-ffa/checkpoints"
