@@ -1,9 +1,9 @@
 | Experiment | Final Reward | Best Reward | Final Win Rate | Best Win Rate | Reward AUC | Eval Points | Last Logged Step |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| PPO | -0.0350 | 0.8175 | 0.0000 | 0.3750 | 482.5600 | 9 | 2048 |
-| Independent (h=3) | -0.6550 | -0.6550 | 0.0000 | 0.0000 | -1656.3200 | 8 | 2048 |
-| Shared (h=1) | -0.0850 | 0.0200 | 0.0000 | 1.0000 | -81.9200 | 8 | 2048 |
-| Shared (h=3) | -1.0000 | 0.0250 | 0.0000 | 1.0000 | -1032.6400 | 9 | 2048 |
-| Shared (h=5) | 0.0000 | 0.0150 | 0.0000 | 0.0000 | -66.5600 | 8 | 2048 |
-| Opponent-Aware (h=3) | -0.6825 | -0.6825 | 0.0000 | 0.0000 | -1691.8400 | 8 | 2048 |
-| Team (h=3) | 0.0000 | 0.0175 | 0.0000 | 0.0000 | 11.8400 | 8 | 2048 |
+| PPO | missing | missing | missing | missing | missing | 0 | 0 |
+| Independent (h=3) | missing | missing | missing | missing | missing | 0 | 0 |
+| Shared (h=1) | missing | missing | missing | missing | missing | 0 | 0 |
+| Shared (h=3) | -0.5948 | -0.3279 | 0.0000 | 0.5000 | -118.0960 | 2 | 690 |
+| Shared (h=5) | missing | missing | missing | missing | missing | 0 | 0 |
+| Opponent-Aware (h=3) | missing | missing | missing | missing | missing | 0 | 0 |
+| Team (h=3) | missing | missing | missing | missing | missing | 0 | 0 |

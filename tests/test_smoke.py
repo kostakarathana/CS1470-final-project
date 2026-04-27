@@ -20,6 +20,8 @@ def test_shared_smoke_run_collects_steps_with_fake_pommerman(tmp_path: Path) -> 
     assert summary["total_env_steps"] == cfg.training.total_steps
     assert summary["replay_size"] >= cfg.training.total_steps
     assert Path(summary["latest_checkpoint_path"]).exists()
+    assert Path(summary["best_checkpoint_path"]).exists()
+    assert summary["best_eval_metrics"]
 
 
 def test_ppo_smoke_run_collects_steps(tmp_path: Path) -> None:

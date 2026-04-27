@@ -31,7 +31,7 @@ algorithm:
     kl_scale: 0.2
     free_nats: 0.1
     board_class_balance: 0.5
-    entropy_coef: 0.03
+    entropy_coef: 0.005
 training:
   total_steps: 16384
   eval_interval_steps: 1024

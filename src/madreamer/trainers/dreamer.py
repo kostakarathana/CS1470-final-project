@@ -46,11 +46,13 @@ class DreamerCollector:
         self.logger = JsonlLogger(cfg.training.log_dir)
         checkpoint_dir = ensure_dir(cfg.training.checkpoint_dir)
         self.checkpoint_path = checkpoint_dir / f"{cfg.experiment_name}_{cfg.algorithm.name}_latest.pt"
+        self.best_checkpoint_path = checkpoint_dir / f"{cfg.experiment_name}_{cfg.algorithm.name}_best.pt"
         self.reward_totals = {agent_id: 0.0 for agent_id in self.env.agent_ids}
         self.env_steps = 0
         self.episodes = 0
         self.episode_id = 0
         self.latest_eval_metrics: dict[str, float] = {}
+        self.best_eval_metrics: dict[str, float] = {}
         self.world_optimizers = {
             agent_id: torch.optim.Adam(
                 model.parameters(),
@@ -172,6 +174,7 @@ class DreamerCollector:
                     force=True,
                 )
                 self.latest_eval_metrics = self.evaluate(self.cfg.training.eval_episodes)
+                self._maybe_save_best_checkpoint()
                 self.logger.log(
                     {
                         "phase": "eval",
@@ -205,6 +208,7 @@ class DreamerCollector:
                 force=True,
             )
             self.latest_eval_metrics = self.evaluate(self.cfg.training.eval_episodes)
+            self._maybe_save_best_checkpoint()
         progress.finish(
             self.env_steps,
             episodes=self.episodes,
@@ -220,6 +224,8 @@ class DreamerCollector:
             replay_size=len(self.replay),
             latest_checkpoint_path=str(self.checkpoint_path),
             latest_eval_metrics=self.latest_eval_metrics,
+            best_checkpoint_path=str(self.best_checkpoint_path) if self.best_checkpoint_path.exists() else None,
+            best_eval_metrics=self.best_eval_metrics,
         )
 
     def evaluate(self, episodes: int, opponent_policy: str | None = None) -> dict[str, float]:
@@ -526,10 +532,11 @@ class DreamerCollector:
         returns = self._lambda_returns(rewards, continuations, values, bootstrap)
         actor_loss = torch.zeros((), device=self.device)
         critic_loss = torch.zeros((), device=self.device)
+        advantages = [returns[index] - value for index, value in enumerate(values)]
+        normalized_advantages = self._normalize_advantages(advantages)
         for index, value in enumerate(values):
-            advantage = returns[index] - value
             actor_loss = actor_loss - (
-                log_probs[index] * advantage.detach()
+                log_probs[index] * normalized_advantages[index].detach()
                 + self.cfg.algorithm.dreamer.entropy_coef * entropies[index]
             ).mean()
             critic_loss = critic_loss + F.mse_loss(value, returns[index].detach())
@@ -542,6 +549,16 @@ class DreamerCollector:
             for action in range(self.env.action_dim):
                 metrics[f"imagined_action_{action}_rate"] = float((action_tensor == action).float().mean().item())
         return actor_loss / scale, critic_loss / scale, metrics
+
+    @staticmethod
+    def _normalize_advantages(advantages: list[Tensor]) -> list[Tensor]:
+        if not advantages:
+            return []
+        flat = torch.cat([advantage.reshape(-1) for advantage in advantages])
+        mean = flat.mean()
+        std = flat.std(unbiased=False)
+        scale = std.clamp_min(1e-6)
+        return [(advantage - mean) / scale for advantage in advantages]
 
     def _batch_behavior_metrics(self, batch: Any) -> dict[str, float]:
         actions = []
@@ -651,13 +668,16 @@ class DreamerCollector:
             )
         )
 
-    def _save_checkpoint(self) -> None:
+    def _save_checkpoint(self, path: Path | None = None) -> None:
+        destination = path or self.checkpoint_path
         payload = {
             "env_steps": self.env_steps,
             "episodes": self.episodes,
             "episode_id": self.episode_id,
             "reward_totals": self.reward_totals,
             "latest_eval_metrics": self.latest_eval_metrics,
+            "best_eval_metrics": self.best_eval_metrics,
+            "best_checkpoint_path": str(self.best_checkpoint_path),
             "bundle": {
                 "world_models": {
                     agent_id: model.state_dict()
@@ -688,7 +708,32 @@ class DreamerCollector:
             },
             "config": asdict(self.cfg),
         }
-        torch.save(payload, self.checkpoint_path)
+        torch.save(payload, destination)
+
+    def _maybe_save_best_checkpoint(self) -> None:
+        if not self.latest_eval_metrics:
+            return
+        if self._is_better_eval(self.latest_eval_metrics, self.best_eval_metrics):
+            self.best_eval_metrics = dict(self.latest_eval_metrics)
+            self._save_checkpoint(self.best_checkpoint_path)
+
+    def _is_better_eval(self, candidate: dict[str, float], incumbent: dict[str, float]) -> bool:
+        if not candidate:
+            return False
+        if not incumbent:
+            return True
+        return self._eval_score(candidate) > self._eval_score(incumbent)
+
+    def _eval_score(self, metrics: dict[str, float]) -> tuple[float, float]:
+        return (
+            self._finite_metric(metrics, "eval_win_rate"),
+            self._finite_metric(metrics, "eval_mean_reward"),
+        )
+
+    @staticmethod
+    def _finite_metric(metrics: dict[str, float], key: str) -> float:
+        value = float(metrics.get(key, float("-inf")))
+        return value if np.isfinite(value) else float("-inf")
 
     def _load_checkpoint(self, path: Path) -> None:
         payload = torch.load(path, map_location=self.device)
@@ -715,3 +760,4 @@ class DreamerCollector:
         self.episode_id = int(payload.get("episode_id", 0))
         self.reward_totals.update(payload.get("reward_totals", {}))
         self.latest_eval_metrics = dict(payload.get("latest_eval_metrics", {}))
+        self.best_eval_metrics = dict(payload.get("best_eval_metrics", {}))
