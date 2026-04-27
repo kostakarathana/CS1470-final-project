@@ -15,7 +15,7 @@ from madreamer.envs.base import MultiAgentEnv
 from madreamer.opponents import FixedOpponentManager
 from madreamer.replay import MultiAgentReplayBuffer, ReplayStep, build_opponent_context
 from madreamer.tracking import JsonlLogger
-from madreamer.trainers.common import TrainingSummary, ensure_dir
+from madreamer.trainers.common import TrainingProgress, TrainingSummary, ensure_dir
 
 
 @dataclass
@@ -75,6 +75,16 @@ class PPOCollector:
         infos = self.env.last_infos
         next_eval_at = self.cfg.training.eval_interval_steps
         next_save_at = self.cfg.training.save_interval_steps
+        progress = TrainingProgress(
+            total_steps=self.cfg.training.total_steps,
+            label=f"{self.cfg.experiment_name}/ppo",
+        )
+        progress.update(
+            self.env_steps,
+            episodes=self.episodes,
+            latest_eval_metrics=self.latest_eval_metrics,
+            force=True,
+        )
 
         while self.env_steps < self.cfg.training.total_steps:
             rollouts = {agent_id: AgentRollout() for agent_id in self.controlled_agent_ids}
@@ -106,6 +116,11 @@ class PPOCollector:
                 infos = step.infos
                 self.env_steps += 1
                 collected += 1
+                progress.update(
+                    self.env_steps,
+                    episodes=self.episodes,
+                    latest_eval_metrics=self.latest_eval_metrics,
+                )
 
                 if step.done:
                     self.episodes += 1
@@ -133,6 +148,13 @@ class PPOCollector:
             self.logger.log(metrics)
 
             if self.env_steps >= next_eval_at:
+                progress.update(
+                    self.env_steps,
+                    episodes=self.episodes,
+                    latest_eval_metrics=self.latest_eval_metrics,
+                    phase="eval",
+                    force=True,
+                )
                 self.latest_eval_metrics = self.evaluate(self.cfg.training.eval_episodes)
                 self.logger.log(
                     {
@@ -145,6 +167,12 @@ class PPOCollector:
                 observations = self.env.reset(seed=self.cfg.seed + self.episode_id + 1000)
                 infos = self.env.last_infos
                 next_eval_at += self.cfg.training.eval_interval_steps
+                progress.update(
+                    self.env_steps,
+                    episodes=self.episodes,
+                    latest_eval_metrics=self.latest_eval_metrics,
+                    force=True,
+                )
 
             if self.env_steps >= next_save_at:
                 self._save_checkpoint()
@@ -152,7 +180,19 @@ class PPOCollector:
 
         self._save_checkpoint()
         if not self.latest_eval_metrics:
+            progress.update(
+                self.env_steps,
+                episodes=self.episodes,
+                latest_eval_metrics=self.latest_eval_metrics,
+                phase="eval",
+                force=True,
+            )
             self.latest_eval_metrics = self.evaluate(self.cfg.training.eval_episodes)
+        progress.finish(
+            self.env_steps,
+            episodes=self.episodes,
+            latest_eval_metrics=self.latest_eval_metrics,
+        )
         return TrainingSummary(
             algorithm="ppo",
             env_mode=self.cfg.env.mode,

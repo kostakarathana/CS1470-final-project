@@ -1,0 +1,42 @@
+seed: 7
+experiment_name: "compute-shared-h1-single-fast-8k"
+env:
+  name: "pommerman"
+  mode: "ffa"
+  num_agents: 4
+  max_steps: 192
+  board_size: 11
+  observability: "full"
+  communication: false
+  board_value_count: 14
+algorithm:
+  name: "shared"
+  learner_setup: "single_learner"
+  opponent_policy: "simple"
+  reward_preset: "shaped"
+  dreamer:
+    latent_dim: 32
+    hidden_dim: 128
+    encoder_channels: 32
+    sequence_length: 8
+    replay_capacity: 4096
+    batch_size: 8
+    warmup_steps: 256
+    policy_warmup_steps: 512
+    updates_per_collect: 1
+    model_learning_rate: 0.0005
+    actor_learning_rate: 0.0001
+    critic_learning_rate: 0.0001
+    imagination_horizon: 1
+    kl_scale: 0.2
+    free_nats: 0.1
+    board_class_balance: 0.5
+    entropy_coef: 0.03
+training:
+  total_steps: 8192
+  eval_interval_steps: 512
+  eval_episodes: 4
+  save_interval_steps: 1024
+  device: "cpu"
+  log_dir: "artifacts/compute/shared-h1-single-fast-8k/logs"
+  checkpoint_dir: "artifacts/compute/shared-h1-single-fast-8k/checkpoints"

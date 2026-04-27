@@ -16,7 +16,7 @@ from madreamer.models.world_model import RSSMState, extract_observation_targets,
 from madreamer.opponents import FixedOpponentManager
 from madreamer.replay import MultiAgentReplayBuffer, ReplayStep, build_opponent_context
 from madreamer.tracking import JsonlLogger
-from madreamer.trainers.common import TrainingSummary, ensure_dir
+from madreamer.trainers.common import TrainingProgress, TrainingSummary, ensure_dir
 
 
 class DreamerCollector:
@@ -81,6 +81,16 @@ class DreamerCollector:
         states, prev_actions, prev_opponent_contexts = self._initial_rollout_state()
         next_eval_at = self.cfg.training.eval_interval_steps
         next_save_at = self.cfg.training.save_interval_steps
+        progress = TrainingProgress(
+            total_steps=self.cfg.training.total_steps,
+            label=f"{self.cfg.experiment_name}/{self.cfg.algorithm.name}",
+        )
+        progress.update(
+            self.env_steps,
+            episodes=self.episodes,
+            latest_eval_metrics=self.latest_eval_metrics,
+            force=True,
+        )
 
         while self.env_steps < self.cfg.training.total_steps:
             actions = self.opponents.actions(observations, infos)
@@ -128,6 +138,11 @@ class DreamerCollector:
             prev_actions = actions.copy()
             prev_opponent_contexts = opponent_contexts
             self.env_steps += 1
+            progress.update(
+                self.env_steps,
+                episodes=self.episodes,
+                latest_eval_metrics=self.latest_eval_metrics,
+            )
 
             if self._can_update_replay():
                 metrics = self._run_updates()
@@ -149,6 +164,13 @@ class DreamerCollector:
                 states, prev_actions, prev_opponent_contexts = self._initial_rollout_state()
 
             if self.env_steps >= next_eval_at:
+                progress.update(
+                    self.env_steps,
+                    episodes=self.episodes,
+                    latest_eval_metrics=self.latest_eval_metrics,
+                    phase="eval",
+                    force=True,
+                )
                 self.latest_eval_metrics = self.evaluate(self.cfg.training.eval_episodes)
                 self.logger.log(
                     {
@@ -162,6 +184,12 @@ class DreamerCollector:
                 infos = self.env.last_infos
                 states, prev_actions, prev_opponent_contexts = self._initial_rollout_state()
                 next_eval_at += self.cfg.training.eval_interval_steps
+                progress.update(
+                    self.env_steps,
+                    episodes=self.episodes,
+                    latest_eval_metrics=self.latest_eval_metrics,
+                    force=True,
+                )
 
             if self.env_steps >= next_save_at:
                 self._save_checkpoint()
@@ -169,7 +197,19 @@ class DreamerCollector:
 
         self._save_checkpoint()
         if not self.latest_eval_metrics:
+            progress.update(
+                self.env_steps,
+                episodes=self.episodes,
+                latest_eval_metrics=self.latest_eval_metrics,
+                phase="eval",
+                force=True,
+            )
             self.latest_eval_metrics = self.evaluate(self.cfg.training.eval_episodes)
+        progress.finish(
+            self.env_steps,
+            episodes=self.episodes,
+            latest_eval_metrics=self.latest_eval_metrics,
+        )
         return TrainingSummary(
             algorithm=self.cfg.algorithm.name,
             env_mode=self.cfg.env.mode,
