@@ -73,7 +73,7 @@ class PPONetwork(nn.Module):
         encoder_channels: int,
     ) -> None:
         super().__init__()
-        self.encoder = CNNEncoder(obs_shape[0], hidden_dim, encoder_channels)
+        self.encoder = CNNEncoder(obs_shape, hidden_dim, encoder_channels)
         self.actor = ActorNetwork(hidden_dim, hidden_dim, action_dim)
         self.critic = CriticNetwork(hidden_dim, hidden_dim)
 

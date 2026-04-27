@@ -22,11 +22,15 @@ algorithm:
     replay_capacity: 32768
     batch_size: 24
     warmup_steps: 2048
+    policy_warmup_steps: 8192
     updates_per_collect: 4
     model_learning_rate: 0.0003
     actor_learning_rate: 0.0001
     critic_learning_rate: 0.0001
     imagination_horizon: 3
+    kl_scale: 0.2
+    free_nats: 0.1
+    board_class_balance: 0.5
     entropy_coef: 0.03
 training:
   total_steps: 65536

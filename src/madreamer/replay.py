@@ -35,6 +35,7 @@ class AgentSequenceBatch:
     truncated: np.ndarray
     continues: np.ndarray
     alive: np.ndarray
+    events: dict[str, np.ndarray]
 
 
 @dataclass
@@ -106,6 +107,24 @@ class MultiAgentReplayBuffer:
                 [[step.alive[agent_id] for step in sequence] for sequence in sequences],
                 dtype=np.float32,
             )
+            event_names = sorted(
+                {
+                    event_name
+                    for sequence in sequences
+                    for step in sequence
+                    for event_name in step.events[agent_id]
+                }
+            )
+            events = {
+                event_name: np.asarray(
+                    [
+                        [float(step.events[agent_id].get(event_name, 0.0)) for step in sequence]
+                        for sequence in sequences
+                    ],
+                    dtype=np.float32,
+                )
+                for event_name in event_names
+            }
             agents[agent_id] = AgentSequenceBatch(
                 observations=observations,
                 actions=actions,
@@ -117,6 +136,7 @@ class MultiAgentReplayBuffer:
                 truncated=truncated,
                 continues=1.0 - np.clip(terminated + truncated, 0.0, 1.0),
                 alive=alive,
+                events=events,
             )
         return SequenceBatch(episode_ids=episode_ids, agents=agents)
 

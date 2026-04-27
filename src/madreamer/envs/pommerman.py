@@ -14,10 +14,18 @@ import numpy as np
 
 from madreamer.envs.base import ActionDict, EventDict, InfoDict, ObservationDict, StepResult
 
+RIGID_TILE = 1
 WOOD_TILE = 2
+FLAME_TILE = 4
 POWERUP_TILES = {6, 7, 8}
 AGENT_BOARD_BASE = 10
 POMMERMAN_ACTION_DIM = 6
+STOP_ACTION = 0
+BOMB_ACTION = 5
+STEP_PENALTY = 0.001
+SAFE_STOP_PENALTY = 0.01
+TIE_PENALTY = 0.25
+USEFUL_BOMB_REWARD = 0.03
 
 
 class PommermanBackend(Protocol):
@@ -84,6 +92,7 @@ def extract_pommerman_events(
     agent_ids: tuple[str, ...],
     board_size: int,
     mode: str,
+    actions: Mapping[str, int] | None = None,
 ) -> tuple[EventDict, dict[str, bool]]:
     board_before = _coerce_board(previous_observations[agent_ids[0]]["board"], board_size)
     board_after = _coerce_board(next_observations[agent_ids[0]]["board"], board_size)
@@ -113,7 +122,26 @@ def extract_pommerman_events(
             "won": float((terminated[agent_id] or truncated[agent_id]) and raw_rewards[agent_id] > 0.0),
             "lost": float((terminated[agent_id] or truncated[agent_id]) and raw_rewards[agent_id] < 0.0),
             "tied": float((terminated[agent_id] or truncated[agent_id]) and tied),
+            "safe_stop": 0.0,
+            "useful_bomb": 0.0,
         }
+        if actions is not None:
+            action = int(actions[agent_id])
+            previous_observation = previous_observations[agent_id]
+            events[agent_id]["safe_stop"] = float(
+                action == STOP_ACTION
+                and not _is_immediate_bomb_threat(previous_observation, board_size)
+            )
+            events[agent_id]["useful_bomb"] = float(
+                action == BOMB_ACTION
+                and _is_useful_bomb_action(
+                    previous_observation,
+                    agent_id,
+                    agent_ids,
+                    board_size,
+                    mode,
+                )
+            )
     return events, alive_after
 
 
@@ -141,7 +169,10 @@ def shape_pommerman_rewards(
             + 0.02 * event["wood_destroyed"]
             + 0.05 * event["powerup_pickups"]
             + 0.2 * event["enemy_eliminations"]
-            + 0.0 * event["tied"]
+            - TIE_PENALTY * event["tied"]
+            - STEP_PENALTY
+            - SAFE_STOP_PENALTY * event.get("safe_stop", 0.0)
+            + USEFUL_BOMB_REWARD * event.get("useful_bomb", 0.0)
         )
         if not (terminated[agent_id] or truncated[agent_id]):
             shaped[agent_id] += 0.0 * reward
@@ -217,6 +248,7 @@ class PommermanEnv:
             agent_ids=self.agent_ids,
             board_size=self.board_size,
             mode=self.mode,
+            actions=actions,
         )
         rewards = shape_pommerman_rewards(
             raw_rewards,
@@ -390,6 +422,86 @@ def _position_plane(position: tuple[int, int], board_size: int) -> np.ndarray:
     row, col = position
     plane[int(row), int(col)] = 1.0
     return plane
+
+
+def _is_useful_bomb_action(
+    observation: Mapping[str, Any],
+    agent_id: str,
+    agent_ids: tuple[str, ...],
+    board_size: int,
+    mode: str,
+) -> bool:
+    if int(observation.get("ammo", 0)) <= 0:
+        return False
+    board = _coerce_board(observation["board"], board_size)
+    position = tuple(int(value) for value in observation["position"])
+    for delta_row, delta_col in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+        target = (position[0] + delta_row, position[1] + delta_col)
+        if not _in_bounds(board, target):
+            continue
+        tile = int(board[target])
+        if tile == WOOD_TILE:
+            return True
+        for other_id in agent_ids:
+            if other_id != agent_id and _is_enemy(agent_id, other_id, mode) and tile == _agent_board_value(other_id):
+                return True
+    return False
+
+
+def _is_immediate_bomb_threat(observation: Mapping[str, Any], board_size: int) -> bool:
+    board = _coerce_board(observation["board"], board_size)
+    position = tuple(int(value) for value in observation["position"])
+    if int(board[position]) == FLAME_TILE:
+        return True
+    bomb_life = _coerce_board(
+        observation.get("bomb_life", np.zeros_like(board)),
+        board_size,
+    )
+    bomb_blast_strength = _coerce_board(
+        observation.get("bomb_blast_strength", np.zeros_like(board)),
+        board_size,
+    )
+    for bomb_row, bomb_col in np.argwhere(bomb_life > 0):
+        bomb_position = (int(bomb_row), int(bomb_col))
+        if bomb_position == position:
+            return True
+        blast_strength = max(1, int(bomb_blast_strength[bomb_position]))
+        if _bomb_hits_position(board, bomb_position, position, blast_strength):
+            return True
+    return False
+
+
+def _bomb_hits_position(
+    board: np.ndarray,
+    bomb_position: tuple[int, int],
+    position: tuple[int, int],
+    blast_strength: int,
+) -> bool:
+    if bomb_position[0] != position[0] and bomb_position[1] != position[1]:
+        return False
+    distance = abs(bomb_position[0] - position[0]) + abs(bomb_position[1] - position[1])
+    if distance > blast_strength:
+        return False
+    row_step = _sign(position[0] - bomb_position[0])
+    col_step = _sign(position[1] - bomb_position[1])
+    current = (bomb_position[0] + row_step, bomb_position[1] + col_step)
+    while current != position:
+        if int(board[current]) in {RIGID_TILE, WOOD_TILE}:
+            return False
+        current = (current[0] + row_step, current[1] + col_step)
+    return True
+
+
+def _sign(value: int) -> int:
+    if value > 0:
+        return 1
+    if value < 0:
+        return -1
+    return 0
+
+
+def _in_bounds(board: np.ndarray, position: tuple[int, int]) -> bool:
+    return 0 <= position[0] < board.shape[0] and 0 <= position[1] < board.shape[1]
 
 
 def _looks_like_observation_batch(value: Any) -> bool:

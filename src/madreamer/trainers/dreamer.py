@@ -259,6 +259,7 @@ class DreamerCollector:
             "world_model_loss": 0.0,
             "actor_loss": 0.0,
             "critic_loss": 0.0,
+            "policy_updates_enabled": float(self._policy_updates_enabled()),
         }
         valid_sequences = self.replay.num_valid_sequences(self.cfg.algorithm.dreamer.sequence_length)
         if valid_sequences <= 0:
@@ -270,11 +271,24 @@ class DreamerCollector:
                 agent_ids=self.env.agent_ids,
             )
             world_metrics, start_states = self._update_world_models(batch)
-            actor_metrics = self._update_actors_and_critics(batch, start_states)
-            for key, value in {**world_metrics, **actor_metrics}.items():
+            actor_metrics = (
+                self._update_actors_and_critics(batch, start_states)
+                if self._policy_updates_enabled()
+                else {"actor_loss": 0.0, "critic_loss": 0.0, "imagined_action_entropy": 0.0}
+            )
+            behavior_metrics = self._batch_behavior_metrics(batch)
+            for key, value in {**world_metrics, **actor_metrics, **behavior_metrics}.items():
                 metrics[key] = metrics.get(key, 0.0) + value
         scale = float(self.cfg.algorithm.dreamer.updates_per_collect)
-        return {key: value / scale for key, value in metrics.items()}
+        averaged = {key: value / scale for key, value in metrics.items()}
+        averaged["policy_updates_enabled"] = float(self._policy_updates_enabled())
+        averaged["policy_warmup_remaining"] = float(
+            max(0, self.cfg.algorithm.dreamer.policy_warmup_steps - self.env_steps)
+        )
+        return averaged
+
+    def _policy_updates_enabled(self) -> bool:
+        return self.env_steps >= self.cfg.algorithm.dreamer.policy_warmup_steps
 
     def _update_world_models(self, batch: Any) -> tuple[dict[str, float], dict[str, RSSMState]]:
         for optimizer in self.world_optimizers.values():
@@ -286,6 +300,10 @@ class DreamerCollector:
             "world_model_reward": 0.0,
             "world_model_continuation": 0.0,
             "world_model_reconstruction": 0.0,
+            "world_model_board_accuracy": 0.0,
+            "world_model_reward_mae": 0.0,
+            "world_model_continuation_accuracy": 0.0,
+            "world_model_scalar_mae": 0.0,
         }
         start_states: dict[str, RSSMState] = {}
         for agent_id in self.controlled_agent_ids:
@@ -322,6 +340,10 @@ class DreamerCollector:
             "world_model_reward": 0.0,
             "world_model_continuation": 0.0,
             "world_model_reconstruction": 0.0,
+            "world_model_board_accuracy": 0.0,
+            "world_model_reward_mae": 0.0,
+            "world_model_continuation_accuracy": 0.0,
+            "world_model_scalar_mae": 0.0,
         }
         total_loss = torch.zeros((), device=self.device)
         for timestep in range(sequence_length):
@@ -345,9 +367,19 @@ class DreamerCollector:
                 model_output.continuation_logit,
                 continues[:, timestep],
             )
-            board_loss = F.cross_entropy(model_output.board_logits, board_target)
+            board_loss = F.cross_entropy(
+                model_output.board_logits,
+                board_target,
+                weight=self._board_loss_weights(board_target, world_model.board_value_count),
+            )
             scalar_loss = F.mse_loss(model_output.scalar_prediction, scalar_target)
             reconstruction_loss = board_loss + scalar_loss
+            board_prediction = model_output.board_logits.argmax(dim=1)
+            board_accuracy = (board_prediction == board_target).float().mean()
+            reward_mae = (model_output.reward_prediction - rewards[:, timestep]).abs().mean()
+            continuation_prediction = (torch.sigmoid(model_output.continuation_logit) >= 0.5).float()
+            continuation_accuracy = (continuation_prediction == continues[:, timestep]).float().mean()
+            scalar_mae = (model_output.scalar_prediction - scalar_target).abs().mean()
             step_loss = (
                 self.cfg.algorithm.dreamer.kl_scale * kl_loss
                 + self.cfg.algorithm.dreamer.reward_scale * reward_loss
@@ -360,14 +392,34 @@ class DreamerCollector:
             metrics["world_model_reward"] += float(reward_loss.item())
             metrics["world_model_continuation"] += float(continuation_loss.item())
             metrics["world_model_reconstruction"] += float(reconstruction_loss.item())
+            metrics["world_model_board_accuracy"] += float(board_accuracy.item())
+            metrics["world_model_reward_mae"] += float(reward_mae.item())
+            metrics["world_model_continuation_accuracy"] += float(continuation_accuracy.item())
+            metrics["world_model_scalar_mae"] += float(scalar_mae.item())
             state = model_output.posterior_state
         scale = float(sequence_length)
         return total_loss / scale, {key: value / scale for key, value in metrics.items()}, state
 
+    def _board_loss_weights(self, board_target: Tensor, class_count: int) -> Tensor | None:
+        balance = self.cfg.algorithm.dreamer.board_class_balance
+        if balance <= 0.0:
+            return None
+        balance = min(balance, 1.0)
+        counts = torch.bincount(board_target.reshape(-1), minlength=class_count).float()
+        present = counts > 0
+        if int(present.sum().item()) <= 1:
+            return None
+        weights = torch.ones(class_count, device=board_target.device)
+        inverse_frequency = torch.zeros_like(weights)
+        inverse_frequency[present] = torch.sqrt(counts[present].sum() / counts[present].clamp_min(1.0))
+        inverse_frequency[present] = inverse_frequency[present] / inverse_frequency[present].mean().clamp_min(1e-6)
+        weights[present] = (1.0 - balance) + balance * inverse_frequency[present]
+        return weights
+
     def _update_actors_and_critics(self, batch: Any, start_states: dict[str, RSSMState]) -> dict[str, float]:
-        metrics = {"actor_loss": 0.0, "critic_loss": 0.0}
+        metrics = {"actor_loss": 0.0, "critic_loss": 0.0, "imagined_action_entropy": 0.0}
         for agent_id in self.controlled_agent_ids:
-            actor_loss, critic_loss = self._actor_critic_loss(
+            actor_loss, critic_loss, agent_metrics = self._actor_critic_loss(
                 agent_id,
                 start_states[agent_id],
                 batch.agents[agent_id],
@@ -393,10 +445,12 @@ class DreamerCollector:
 
             metrics["actor_loss"] += float(actor_loss.item())
             metrics["critic_loss"] += float(critic_loss.item())
+            for key, value in agent_metrics.items():
+                metrics[key] = metrics.get(key, 0.0) + value
         scale = float(len(self.controlled_agent_ids))
         return {key: value / scale for key, value in metrics.items()}
 
-    def _actor_critic_loss(self, agent_id: str, start_state: RSSMState, agent_batch: Any) -> tuple[Tensor, Tensor]:
+    def _actor_critic_loss(self, agent_id: str, start_state: RSSMState, agent_batch: Any) -> tuple[Tensor, Tensor, dict[str, float]]:
         world_model = self.bundle.world_models[agent_id]
         actor = self.bundle.actors[agent_id]
         critic = self.bundle.critics[agent_id]
@@ -411,12 +465,14 @@ class DreamerCollector:
         log_probs: list[Tensor] = []
         entropies: list[Tensor] = []
         values: list[Tensor] = []
+        imagined_actions: list[Tensor] = []
         for _ in range(self.cfg.algorithm.dreamer.imagination_horizon):
             features = state.features
             actor_output = actor.act(features, deterministic=False)
             values.append(critic(features))
             log_probs.append(actor_output.log_prob)
             entropies.append(actor_output.entropy)
+            imagined_actions.append(actor_output.action)
             imagination = world_model.imagine(
                 state,
                 actor_output.action,
@@ -438,7 +494,45 @@ class DreamerCollector:
             ).mean()
             critic_loss = critic_loss + F.mse_loss(value, returns[index].detach())
         scale = float(max(len(values), 1))
-        return actor_loss / scale, critic_loss / scale
+        metrics = {
+            "imagined_action_entropy": float(torch.stack(entropies).mean().item()) if entropies else 0.0,
+        }
+        if imagined_actions:
+            action_tensor = torch.stack(imagined_actions).reshape(-1)
+            for action in range(self.env.action_dim):
+                metrics[f"imagined_action_{action}_rate"] = float((action_tensor == action).float().mean().item())
+        return actor_loss / scale, critic_loss / scale, metrics
+
+    def _batch_behavior_metrics(self, batch: Any) -> dict[str, float]:
+        actions = []
+        safe_stop_rates = []
+        useful_bomb_rates = []
+        tie_rates = []
+        for agent_id in self.controlled_agent_ids:
+            agent_batch = batch.agents[agent_id]
+            actions.append(torch.as_tensor(agent_batch.actions, device=self.device, dtype=torch.long).reshape(-1))
+            if "safe_stop" in agent_batch.events:
+                safe_stop_rates.append(float(agent_batch.events["safe_stop"].mean()))
+            if "useful_bomb" in agent_batch.events:
+                useful_bomb_rates.append(float(agent_batch.events["useful_bomb"].mean()))
+            if "tied" in agent_batch.events:
+                tie_rates.append(float(agent_batch.events["tied"].mean()))
+        if actions:
+            action_tensor = torch.cat(actions)
+        else:
+            action_tensor = torch.zeros(0, device=self.device, dtype=torch.long)
+        metrics = {
+            "behavior_safe_stop_rate": float(np.mean(safe_stop_rates)) if safe_stop_rates else 0.0,
+            "behavior_useful_bomb_rate": float(np.mean(useful_bomb_rates)) if useful_bomb_rates else 0.0,
+            "behavior_tie_rate": float(np.mean(tie_rates)) if tie_rates else 0.0,
+        }
+        for action in range(self.env.action_dim):
+            metrics[f"behavior_action_{action}_rate"] = (
+                float((action_tensor == action).float().mean().item())
+                if action_tensor.numel()
+                else 0.0
+            )
+        return metrics
 
     def _lambda_returns(
         self,

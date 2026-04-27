@@ -45,6 +45,7 @@ class DreamerConfig:
     replay_capacity: int = 2048
     batch_size: int = 8
     warmup_steps: int = 64
+    policy_warmup_steps: int = 0
     updates_per_collect: int = 2
     model_learning_rate: float = 3e-4
     actor_learning_rate: float = 3e-4
@@ -57,6 +58,7 @@ class DreamerConfig:
     reward_scale: float = 1.0
     continuation_scale: float = 1.0
     reconstruction_scale: float = 1.0
+    board_class_balance: float = 0.0
     entropy_coef: float = 0.01
     max_grad_norm: float = 1.0
 

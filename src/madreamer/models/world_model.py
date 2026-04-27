@@ -37,19 +37,26 @@ class ImaginationOutput:
 
 
 class CNNEncoder(nn.Module):
-    def __init__(self, in_channels: int, hidden_dim: int, encoder_channels: int) -> None:
+    def __init__(self, obs_shape: tuple[int, ...], hidden_dim: int, encoder_channels: int) -> None:
         super().__init__()
+        in_channels, height, width = obs_shape
         self.conv = nn.Sequential(
             nn.Conv2d(in_channels, encoder_channels, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.Conv2d(encoder_channels, encoder_channels, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Conv2d(encoder_channels, encoder_channels, kernel_size=3, padding=1),
+            nn.ReLU(),
         )
-        self.proj = nn.Linear(encoder_channels, hidden_dim)
+        self.proj = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(encoder_channels * height * width, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+        )
 
     def forward(self, obs: Tensor) -> Tensor:
-        features = self.conv(obs).flatten(start_dim=1)
+        features = self.conv(obs)
         return self.proj(features)
 
 
@@ -71,7 +78,7 @@ class WorldModel(nn.Module):
         self.hidden_dim = hidden_dim
         self.board_value_count = board_value_count
         self.opponent_action_dim = opponent_action_dim
-        self.encoder = CNNEncoder(obs_shape[0], hidden_dim, encoder_channels)
+        self.encoder = CNNEncoder(obs_shape, hidden_dim, encoder_channels)
         self.rnn = nn.GRUCell(latent_dim + action_dim + opponent_action_dim, hidden_dim)
         self.prior_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
