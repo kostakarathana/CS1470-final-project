@@ -63,7 +63,7 @@ def make_board(size, num_rigid=0, num_wood=0, num_agents=4):
 
     def lay_wall(value, num_left, coordinates, board):
         '''Lays all of the walls on a board'''
-        x, y = random.sample(coordinates, 1)[0]
+        x, y = random.sample(list(coordinates), 1)[0]
         coordinates.remove((x, y))
         coordinates.remove((y, x))
         board[x, y] = value
