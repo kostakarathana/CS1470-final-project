@@ -24,6 +24,7 @@ algorithm:
     warmup_steps: 1024
     policy_warmup_steps: 4096
     updates_per_collect: 4
+    train_every_steps: 4
     model_learning_rate: 0.0005
     actor_learning_rate: 0.0001
     critic_learning_rate: 0.0001

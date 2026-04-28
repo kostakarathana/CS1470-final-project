@@ -6,6 +6,7 @@ import torch
 from madreamer.builders import build_modules
 from madreamer.config import load_experiment_config
 from madreamer.envs.factory import build_env
+from madreamer.models.world_model import extract_observation_targets
 from madreamer.replay import MultiAgentReplayBuffer
 from madreamer.rollout import collect_episode
 from madreamer.trainers.dreamer import DreamerCollector
@@ -30,8 +31,31 @@ def test_world_model_observe_and_imagine_shapes() -> None:
 
     assert output.posterior_state.features.shape[-1] == model.features_dim
     assert output.board_logits.shape == (2, cfg.env.board_value_count, 11, 11)
+    assert output.scalar_prediction.shape == (2, 6, 11, 11)
     assert imagined.reward_prediction.shape == (2,)
     env.close()
+
+
+def test_world_model_targets_include_bombs_position_and_scalars() -> None:
+    obs = torch.zeros((1, 20, 11, 11))
+    obs[:, 10] = 1.0
+    obs[:, 14, 2, 3] = 0.5
+    obs[:, 15, 2, 3] = 0.7
+    obs[:, 16, 4, 5] = 1.0
+    obs[:, 17] = 0.2
+    obs[:, 18] = 0.3
+    obs[:, 19] = 1.0
+
+    board_target, feature_target = extract_observation_targets(obs, board_value_count=14)
+
+    assert board_target.shape == (1, 11, 11)
+    assert feature_target.shape == (1, 6, 11, 11)
+    assert feature_target[0, 0, 2, 3] == 0.5
+    assert feature_target[0, 1, 2, 3] == 0.7
+    assert feature_target[0, 2, 4, 5] == 1.0
+    assert torch.all(feature_target[0, 3] == 0.2)
+    assert torch.all(feature_target[0, 4] == 0.3)
+    assert torch.all(feature_target[0, 5] == 1.0)
 
 
 def test_dreamer_update_path_runs_on_fake_sequences(tmp_path: Path) -> None:
@@ -83,7 +107,31 @@ def test_policy_warmup_skips_actor_critic_updates(tmp_path: Path) -> None:
     assert metrics["critic_loss"] == 0.0
     assert "behavior_action_0_rate" in metrics
     assert "behavior_safe_stop_rate" in metrics
+    assert "behavior_blocked_move_rate" in metrics
     assert "behavior_wasted_bomb_rate" in metrics
+    env.close()
+
+
+def test_dreamer_update_cadence_respects_train_every_steps(tmp_path: Path) -> None:
+    config_path = Path(__file__).resolve().parents[1] / "configs" / "shared_smoke.yaml"
+    cfg = load_experiment_config(config_path)
+    cfg.algorithm.dreamer.train_every_steps = 4
+    cfg.training.log_dir = str(tmp_path / "logs")
+    cfg.training.checkpoint_dir = str(tmp_path / "checkpoints")
+    env = build_env(cfg, pommerman_backend_factory=fake_backend_factory("ffa"))
+    bundle = build_modules(cfg, env.agent_ids, env.observation_shape, env.action_dim, cfg.env.board_value_count)
+    replay = MultiAgentReplayBuffer(capacity=128)
+    trainer = DreamerCollector(env, bundle, cfg, replay)
+
+    policies = {agent_id: (lambda _agent_id, _obs, _info: 0) for agent_id in env.agent_ids}
+    collect_episode(env, policies, replay=replay, seed=0, episode_id=0)
+    collect_episode(env, policies, replay=replay, seed=1, episode_id=1)
+
+    trainer.env_steps = cfg.algorithm.dreamer.warmup_steps + 1
+    assert not trainer._can_update_replay()
+
+    trainer.env_steps = cfg.algorithm.dreamer.warmup_steps + cfg.algorithm.dreamer.train_every_steps
+    assert trainer._can_update_replay()
     env.close()
 
 
@@ -101,6 +149,14 @@ def test_dreamer_advantage_normalization_preserves_raw_advantages() -> None:
     assert torch.allclose(normalized_flat.std(unbiased=False), torch.tensor(1.0), atol=1e-6)
     for advantage, snapshot in zip(raw_advantages, raw_snapshot):
         assert torch.equal(advantage, snapshot)
+
+
+def test_free_nats_applies_per_sample_before_averaging() -> None:
+    kl_values = torch.tensor([0.0, 1.0])
+
+    loss = DreamerCollector._apply_free_nats(kl_values, free_nats=0.5)
+
+    assert torch.allclose(loss, torch.tensor(0.75))
 
 
 def test_dreamer_eval_comparison_prioritizes_win_rate(tmp_path: Path) -> None:

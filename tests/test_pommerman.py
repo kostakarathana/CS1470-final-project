@@ -139,6 +139,69 @@ def test_shaped_rewards_do_not_penalize_stopping_under_bomb_threat() -> None:
     assert shaped["agent_0"] == -0.001
 
 
+def test_shaped_rewards_penalize_blocked_moves() -> None:
+    board = np.zeros((11, 11), dtype=np.int64)
+    board[1, 1] = 10
+    previous = {
+        "agent_0": make_observation(0, board=board, position=(1, 1)),
+        "agent_1": make_observation(1, board=board, position=(0, 10)),
+        "agent_2": make_observation(2, board=board, position=(10, 0)),
+        "agent_3": make_observation(3, board=board, position=(10, 10)),
+    }
+    raw_rewards = {agent_id: 0.0 for agent_id in previous}
+    terminated = {agent_id: False for agent_id in previous}
+    truncated = {agent_id: False for agent_id in previous}
+    events, _ = extract_pommerman_events(
+        previous,
+        previous,
+        raw_rewards,
+        terminated,
+        truncated,
+        agent_ids=tuple(previous),
+        board_size=11,
+        mode="ffa",
+        actions={"agent_0": 3, "agent_1": 0, "agent_2": 0, "agent_3": 0},
+    )
+
+    shaped = shape_pommerman_rewards(raw_rewards, events, terminated, truncated, reward_preset="shaped")
+
+    assert events["agent_0"]["blocked_move"] == 1.0
+    assert shaped["agent_0"] < -0.001
+
+
+def test_shaped_rewards_do_not_penalize_blocked_moves_under_bomb_threat() -> None:
+    board = np.zeros((11, 11), dtype=np.int64)
+    board[1, 1] = 10
+    observation = make_observation(0, board=board, position=(1, 1))
+    observation["bomb_life"][1, 3] = 3.0
+    observation["bomb_blast_strength"][1, 3] = 3.0
+    previous = {
+        "agent_0": observation,
+        "agent_1": make_observation(1, board=board, position=(0, 10)),
+        "agent_2": make_observation(2, board=board, position=(10, 0)),
+        "agent_3": make_observation(3, board=board, position=(10, 10)),
+    }
+    raw_rewards = {agent_id: 0.0 for agent_id in previous}
+    terminated = {agent_id: False for agent_id in previous}
+    truncated = {agent_id: False for agent_id in previous}
+    events, _ = extract_pommerman_events(
+        previous,
+        previous,
+        raw_rewards,
+        terminated,
+        truncated,
+        agent_ids=tuple(previous),
+        board_size=11,
+        mode="ffa",
+        actions={"agent_0": 3, "agent_1": 0, "agent_2": 0, "agent_3": 0},
+    )
+
+    shaped = shape_pommerman_rewards(raw_rewards, events, terminated, truncated, reward_preset="shaped")
+
+    assert events["agent_0"]["blocked_move"] == 0.0
+    assert shaped["agent_0"] == -0.001
+
+
 def test_shaped_rewards_encourage_useful_bombs() -> None:
     board = np.zeros((11, 11), dtype=np.int64)
     board[5, 5] = 10

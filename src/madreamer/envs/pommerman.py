@@ -22,8 +22,10 @@ AGENT_BOARD_BASE = 10
 POMMERMAN_ACTION_DIM = 6
 STOP_ACTION = 0
 BOMB_ACTION = 5
+MOVE_ACTIONS = {1, 2, 3, 4}
 STEP_PENALTY = 0.001
 SAFE_STOP_PENALTY = 0.01
+BLOCKED_MOVE_PENALTY = 0.02
 TIE_PENALTY = 0.25
 USEFUL_BOMB_REWARD = 0.015
 WASTED_BOMB_PENALTY = 0.02
@@ -124,15 +126,25 @@ def extract_pommerman_events(
             "lost": float((terminated[agent_id] or truncated[agent_id]) and raw_rewards[agent_id] < 0.0),
             "tied": float((terminated[agent_id] or truncated[agent_id]) and tied),
             "safe_stop": 0.0,
+            "blocked_move": 0.0,
             "useful_bomb": 0.0,
             "wasted_bomb": 0.0,
         }
         if actions is not None:
             action = int(actions[agent_id])
             previous_observation = previous_observations[agent_id]
+            previous_position = tuple(int(value) for value in previous_observation.get("position", (0, 0)))
+            under_bomb_threat = _is_immediate_bomb_threat(previous_observation, board_size)
             events[agent_id]["safe_stop"] = float(
                 action == STOP_ACTION
-                and not _is_immediate_bomb_threat(previous_observation, board_size)
+                and not under_bomb_threat
+            )
+            events[agent_id]["blocked_move"] = float(
+                action in MOVE_ACTIONS
+                and previous_position == next_position
+                and alive_before[agent_id]
+                and alive_after[agent_id]
+                and not under_bomb_threat
             )
             useful_bomb = (
                 action == BOMB_ACTION
@@ -176,6 +188,7 @@ def shape_pommerman_rewards(
             - TIE_PENALTY * event["tied"]
             - STEP_PENALTY
             - SAFE_STOP_PENALTY * event.get("safe_stop", 0.0)
+            - BLOCKED_MOVE_PENALTY * event.get("blocked_move", 0.0)
             + USEFUL_BOMB_REWARD * event.get("useful_bomb", 0.0)
             - WASTED_BOMB_PENALTY * event.get("wasted_bomb", 0.0)
         )

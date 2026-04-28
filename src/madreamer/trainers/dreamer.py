@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -74,6 +75,13 @@ class DreamerCollector:
             )
             for agent_id in self.controlled_agent_ids
         }
+        self.target_critics = {
+            agent_id: copy.deepcopy(self.bundle.critics[agent_id]).eval()
+            for agent_id in self.controlled_agent_ids
+        }
+        for target_critic in self.target_critics.values():
+            for parameter in target_critic.parameters():
+                parameter.requires_grad_(False)
         if cfg.training.resume_checkpoint:
             self._load_checkpoint(Path(cfg.training.resume_checkpoint))
 
@@ -297,6 +305,9 @@ class DreamerCollector:
     def _can_update_replay(self) -> bool:
         if len(self.replay) < self.cfg.algorithm.dreamer.warmup_steps:
             return False
+        train_every_steps = max(1, self.cfg.algorithm.dreamer.train_every_steps)
+        if self.env_steps % train_every_steps != 0:
+            return False
         sequence_length = self.cfg.algorithm.dreamer.sequence_length
         return self.replay.num_valid_sequences(sequence_length) > 0
 
@@ -347,9 +358,14 @@ class DreamerCollector:
             "world_model_continuation": 0.0,
             "world_model_reconstruction": 0.0,
             "world_model_board_accuracy": 0.0,
+            "world_model_kl_raw": 0.0,
             "world_model_reward_mae": 0.0,
             "world_model_continuation_accuracy": 0.0,
             "world_model_scalar_mae": 0.0,
+            "world_model_feature_mae": 0.0,
+            "world_model_bomb_blast_mae": 0.0,
+            "world_model_bomb_life_mae": 0.0,
+            "world_model_position_mae": 0.0,
         }
         start_states: dict[str, RSSMState] = {}
         for agent_id in self.controlled_agent_ids:
@@ -369,7 +385,8 @@ class DreamerCollector:
         return {key: value / scale for key, value in metrics.items()}, start_states
 
     def _world_model_loss(self, world_model: Any, agent_batch: Any) -> tuple[Tensor, dict[str, float], RSSMState]:
-        observations = self._obs_tensor(agent_batch.next_observations)
+        observations = self._obs_tensor(agent_batch.observations)
+        next_observations = self._obs_tensor(agent_batch.next_observations)
         actions = torch.as_tensor(agent_batch.actions, device=self.device, dtype=torch.long)
         rewards = torch.as_tensor(agent_batch.rewards, device=self.device, dtype=torch.float32)
         continues = torch.as_tensor(agent_batch.continues, device=self.device, dtype=torch.float32)
@@ -387,27 +404,44 @@ class DreamerCollector:
             "world_model_continuation": 0.0,
             "world_model_reconstruction": 0.0,
             "world_model_board_accuracy": 0.0,
+            "world_model_kl_raw": 0.0,
             "world_model_reward_mae": 0.0,
             "world_model_continuation_accuracy": 0.0,
             "world_model_scalar_mae": 0.0,
+            "world_model_feature_mae": 0.0,
+            "world_model_bomb_blast_mae": 0.0,
+            "world_model_bomb_life_mae": 0.0,
+            "world_model_position_mae": 0.0,
         }
+        zero_prev_actions = torch.zeros(batch_size, device=self.device, dtype=torch.long)
+        zero_opponent_actions = (
+            torch.zeros(batch_size, world_model.opponent_action_dim, device=self.device, dtype=torch.float32)
+            if world_model.opponent_action_dim
+            else None
+        )
+        state = world_model.observe(
+            observations[:, 0],
+            zero_prev_actions,
+            state,
+            zero_opponent_actions,
+            deterministic=False,
+        ).posterior_state
+        posterior_states: list[RSSMState] = []
         total_loss = torch.zeros((), device=self.device)
         for timestep in range(sequence_length):
             model_output = world_model.observe(
-                observations[:, timestep],
+                next_observations[:, timestep],
                 actions[:, timestep],
                 state,
                 opponent_actions[:, timestep] if opponent_actions is not None else None,
                 deterministic=False,
             )
             board_target, scalar_target = extract_observation_targets(
-                observations[:, timestep],
+                next_observations[:, timestep],
                 world_model.board_value_count,
             )
-            kl_loss = torch.clamp(
-                kl_divergence(model_output.posterior_state, model_output.prior_state).mean(),
-                min=self.cfg.algorithm.dreamer.free_nats,
-            )
+            kl_values = kl_divergence(model_output.posterior_state, model_output.prior_state)
+            kl_loss = self._apply_free_nats(kl_values, self.cfg.algorithm.dreamer.free_nats)
             reward_loss = F.mse_loss(model_output.reward_prediction, rewards[:, timestep])
             continuation_loss = F.binary_cross_entropy_with_logits(
                 model_output.continuation_logit,
@@ -426,6 +460,9 @@ class DreamerCollector:
             continuation_prediction = (torch.sigmoid(model_output.continuation_logit) >= 0.5).float()
             continuation_accuracy = (continuation_prediction == continues[:, timestep]).float().mean()
             scalar_mae = (model_output.scalar_prediction - scalar_target).abs().mean()
+            bomb_blast_mae = (model_output.scalar_prediction[:, 0] - scalar_target[:, 0]).abs().mean()
+            bomb_life_mae = (model_output.scalar_prediction[:, 1] - scalar_target[:, 1]).abs().mean()
+            position_mae = (model_output.scalar_prediction[:, 2] - scalar_target[:, 2]).abs().mean()
             step_loss = (
                 self.cfg.algorithm.dreamer.kl_scale * kl_loss
                 + self.cfg.algorithm.dreamer.reward_scale * reward_loss
@@ -439,12 +476,18 @@ class DreamerCollector:
             metrics["world_model_continuation"] += float(continuation_loss.item())
             metrics["world_model_reconstruction"] += float(reconstruction_loss.item())
             metrics["world_model_board_accuracy"] += float(board_accuracy.item())
+            metrics["world_model_kl_raw"] += float(kl_values.mean().item())
             metrics["world_model_reward_mae"] += float(reward_mae.item())
             metrics["world_model_continuation_accuracy"] += float(continuation_accuracy.item())
             metrics["world_model_scalar_mae"] += float(scalar_mae.item())
+            metrics["world_model_feature_mae"] += float(scalar_mae.item())
+            metrics["world_model_bomb_blast_mae"] += float(bomb_blast_mae.item())
+            metrics["world_model_bomb_life_mae"] += float(bomb_life_mae.item())
+            metrics["world_model_position_mae"] += float(position_mae.item())
             state = model_output.posterior_state
+            posterior_states.append(self._detach_state(state))
         scale = float(sequence_length)
-        return total_loss / scale, {key: value / scale for key, value in metrics.items()}, state
+        return total_loss / scale, {key: value / scale for key, value in metrics.items()}, self._concat_states(posterior_states)
 
     def _board_loss_weights(self, board_target: Tensor, class_count: int) -> Tensor | None:
         balance = self.cfg.algorithm.dreamer.board_class_balance
@@ -474,7 +517,7 @@ class DreamerCollector:
             critic_optimizer = self.critic_optimizers[agent_id]
 
             actor_optimizer.zero_grad()
-            actor_loss.backward(retain_graph=True)
+            actor_loss.backward()
             torch.nn.utils.clip_grad_norm_(
                 self.bundle.actors[agent_id].parameters(),
                 self.cfg.algorithm.dreamer.max_grad_norm,
@@ -488,6 +531,7 @@ class DreamerCollector:
                 self.cfg.algorithm.dreamer.max_grad_norm,
             )
             critic_optimizer.step()
+            self._update_target_critic(agent_id)
 
             metrics["actor_loss"] += float(actor_loss.item())
             metrics["critic_loss"] += float(critic_loss.item())
@@ -500,22 +544,22 @@ class DreamerCollector:
         world_model = self.bundle.world_models[agent_id]
         actor = self.bundle.actors[agent_id]
         critic = self.bundle.critics[agent_id]
+        target_critic = self.target_critics[agent_id]
         state = self._detach_state(start_state)
-        opponent_context = (
-            torch.as_tensor(agent_batch.opponent_actions[:, -1], device=self.device, dtype=torch.float32)
-            if world_model.opponent_action_dim
-            else None
-        )
+        opponent_context = self._opponent_context_for_imagination(world_model, agent_batch, state)
         rewards: list[Tensor] = []
         continuations: list[Tensor] = []
         log_probs: list[Tensor] = []
         entropies: list[Tensor] = []
         values: list[Tensor] = []
+        target_values: list[Tensor] = []
         imagined_actions: list[Tensor] = []
         for _ in range(self.cfg.algorithm.dreamer.imagination_horizon):
             features = state.features
             actor_output = actor.act(features, deterministic=False)
             values.append(critic(features))
+            with torch.no_grad():
+                target_values.append(target_critic(features))
             log_probs.append(actor_output.log_prob)
             entropies.append(actor_output.entropy)
             imagined_actions.append(actor_output.action)
@@ -528,8 +572,9 @@ class DreamerCollector:
             rewards.append(imagination.reward_prediction)
             continuations.append(torch.sigmoid(imagination.continuation_logit))
             state = self._detach_state(imagination.next_state)
-        bootstrap = critic(state.features).detach()
-        returns = self._lambda_returns(rewards, continuations, values, bootstrap)
+        with torch.no_grad():
+            bootstrap = target_critic(state.features)
+        returns = self._lambda_returns(rewards, continuations, target_values, bootstrap)
         actor_loss = torch.zeros((), device=self.device)
         critic_loss = torch.zeros((), device=self.device)
         advantages = [returns[index] - value for index, value in enumerate(values)]
@@ -551,6 +596,32 @@ class DreamerCollector:
         return actor_loss / scale, critic_loss / scale, metrics
 
     @staticmethod
+    def _apply_free_nats(kl_values: Tensor, free_nats: float) -> Tensor:
+        return torch.clamp(kl_values, min=free_nats).mean()
+
+    def _opponent_context_for_imagination(
+        self,
+        world_model: Any,
+        agent_batch: Any,
+        state: RSSMState,
+    ) -> Tensor | None:
+        if not world_model.opponent_action_dim:
+            return None
+        opponent_actions = torch.as_tensor(agent_batch.opponent_actions, device=self.device, dtype=torch.float32)
+        flat_opponent_actions = opponent_actions.reshape(-1, world_model.opponent_action_dim)
+        if flat_opponent_actions.shape[0] == state.deter.shape[0]:
+            return flat_opponent_actions
+        return opponent_actions[:, -1]
+
+    def _update_target_critic(self, agent_id: str) -> None:
+        tau = self.cfg.algorithm.dreamer.critic_target_tau
+        source = self.bundle.critics[agent_id]
+        target = self.target_critics[agent_id]
+        with torch.no_grad():
+            for target_param, source_param in zip(target.parameters(), source.parameters()):
+                target_param.data.lerp_(source_param.data, tau)
+
+    @staticmethod
     def _normalize_advantages(advantages: list[Tensor]) -> list[Tensor]:
         if not advantages:
             return []
@@ -563,6 +634,7 @@ class DreamerCollector:
     def _batch_behavior_metrics(self, batch: Any) -> dict[str, float]:
         actions = []
         safe_stop_rates = []
+        blocked_move_rates = []
         useful_bomb_rates = []
         wasted_bomb_rates = []
         tie_rates = []
@@ -571,6 +643,8 @@ class DreamerCollector:
             actions.append(torch.as_tensor(agent_batch.actions, device=self.device, dtype=torch.long).reshape(-1))
             if "safe_stop" in agent_batch.events:
                 safe_stop_rates.append(float(agent_batch.events["safe_stop"].mean()))
+            if "blocked_move" in agent_batch.events:
+                blocked_move_rates.append(float(agent_batch.events["blocked_move"].mean()))
             if "useful_bomb" in agent_batch.events:
                 useful_bomb_rates.append(float(agent_batch.events["useful_bomb"].mean()))
             if "wasted_bomb" in agent_batch.events:
@@ -583,6 +657,7 @@ class DreamerCollector:
             action_tensor = torch.zeros(0, device=self.device, dtype=torch.long)
         metrics = {
             "behavior_safe_stop_rate": float(np.mean(safe_stop_rates)) if safe_stop_rates else 0.0,
+            "behavior_blocked_move_rate": float(np.mean(blocked_move_rates)) if blocked_move_rates else 0.0,
             "behavior_useful_bomb_rate": float(np.mean(useful_bomb_rates)) if useful_bomb_rates else 0.0,
             "behavior_wasted_bomb_rate": float(np.mean(wasted_bomb_rates)) if wasted_bomb_rates else 0.0,
             "behavior_tie_rate": float(np.mean(tie_rates)) if tie_rates else 0.0,
@@ -637,6 +712,16 @@ class DreamerCollector:
             stoch=state.stoch.detach(),
             mean=state.mean.detach(),
             std=state.std.detach(),
+        )
+
+    def _concat_states(self, states: list[RSSMState]) -> RSSMState:
+        if not states:
+            raise ValueError("Cannot build imagination starts from an empty sequence.")
+        return RSSMState(
+            deter=torch.cat([state.deter for state in states], dim=0),
+            stoch=torch.cat([state.stoch for state in states], dim=0),
+            mean=torch.cat([state.mean for state in states], dim=0),
+            std=torch.cat([state.std for state in states], dim=0),
         )
 
     def _obs_tensor(self, obs: np.ndarray) -> Tensor:
@@ -695,6 +780,10 @@ class DreamerCollector:
                     agent_id: critic.state_dict()
                     for agent_id, critic in self.bundle.critics.items()
                 },
+                "target_critics": {
+                    agent_id: critic.state_dict()
+                    for agent_id, critic in self.target_critics.items()
+                },
             },
             "optimizers": {
                 "world": {
@@ -750,6 +839,14 @@ class DreamerCollector:
         for agent_id, state_dict in payload.get("bundle", {}).get("critics", {}).items():
             if agent_id in self.bundle.critics:
                 self.bundle.critics[agent_id].load_state_dict(state_dict)
+        loaded_target_critics: set[str] = set()
+        for agent_id, state_dict in payload.get("bundle", {}).get("target_critics", {}).items():
+            if agent_id in self.target_critics:
+                self.target_critics[agent_id].load_state_dict(state_dict)
+                loaded_target_critics.add(agent_id)
+        for agent_id, target_critic in self.target_critics.items():
+            if agent_id not in loaded_target_critics and agent_id in self.bundle.critics:
+                target_critic.load_state_dict(self.bundle.critics[agent_id].state_dict())
         for agent_id, optimizer_state in payload.get("optimizers", {}).get("world", {}).items():
             if agent_id in self.world_optimizers:
                 self.world_optimizers[agent_id].load_state_dict(optimizer_state)

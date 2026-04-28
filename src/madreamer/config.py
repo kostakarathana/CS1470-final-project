@@ -47,9 +47,11 @@ class DreamerConfig:
     warmup_steps: int = 64
     policy_warmup_steps: int = 0
     updates_per_collect: int = 2
+    train_every_steps: int = 1
     model_learning_rate: float = 3e-4
     actor_learning_rate: float = 3e-4
     critic_learning_rate: float = 3e-4
+    critic_target_tau: float = 0.01
     imagination_horizon: int = 5
     gamma: float = 0.99
     lambda_return: float = 0.95

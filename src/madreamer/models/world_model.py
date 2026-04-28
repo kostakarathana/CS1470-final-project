@@ -77,6 +77,7 @@ class WorldModel(nn.Module):
         self.latent_dim = latent_dim
         self.hidden_dim = hidden_dim
         self.board_value_count = board_value_count
+        self.observation_feature_channels = obs_shape[0] - board_value_count
         self.opponent_action_dim = opponent_action_dim
         self.encoder = CNNEncoder(obs_shape, hidden_dim, encoder_channels)
         self.rnn = nn.GRUCell(latent_dim + action_dim + opponent_action_dim, hidden_dim)
@@ -109,7 +110,7 @@ class WorldModel(nn.Module):
         self.scalar_decoder = nn.Sequential(
             nn.Linear(feature_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, 3),
+            nn.Linear(hidden_dim, self.observation_feature_channels * obs_shape[1] * obs_shape[2]),
         )
 
     @property
@@ -202,7 +203,12 @@ class WorldModel(nn.Module):
             self.obs_shape[1],
             self.obs_shape[2],
         )
-        scalar_prediction = self.scalar_decoder(features)
+        scalar_prediction = self.scalar_decoder(features).reshape(
+            features.shape[0],
+            self.observation_feature_channels,
+            self.obs_shape[1],
+            self.obs_shape[2],
+        )
         return reward_prediction, continuation_logit, board_logits, scalar_prediction
 
     def _stats(self, stats: Tensor) -> tuple[Tensor, Tensor]:
@@ -228,12 +234,5 @@ def kl_divergence(posterior: RSSMState, prior: RSSMState) -> Tensor:
 
 def extract_observation_targets(obs: Tensor, board_value_count: int) -> tuple[Tensor, Tensor]:
     board_target = obs[:, :board_value_count].argmax(dim=1)
-    scalar_target = torch.stack(
-        [
-            obs[:, board_value_count + 3, 0, 0],
-            obs[:, board_value_count + 4, 0, 0],
-            obs[:, board_value_count + 5, 0, 0],
-        ],
-        dim=-1,
-    )
-    return board_target.long(), scalar_target.float()
+    feature_target = obs[:, board_value_count:]
+    return board_target.long(), feature_target.float()
