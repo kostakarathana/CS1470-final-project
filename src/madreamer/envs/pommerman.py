@@ -25,7 +25,8 @@ BOMB_ACTION = 5
 STEP_PENALTY = 0.001
 SAFE_STOP_PENALTY = 0.01
 TIE_PENALTY = 0.25
-USEFUL_BOMB_REWARD = 0.03
+USEFUL_BOMB_REWARD = 0.015
+WASTED_BOMB_PENALTY = 0.02
 
 
 class PommermanBackend(Protocol):
@@ -124,6 +125,7 @@ def extract_pommerman_events(
             "tied": float((terminated[agent_id] or truncated[agent_id]) and tied),
             "safe_stop": 0.0,
             "useful_bomb": 0.0,
+            "wasted_bomb": 0.0,
         }
         if actions is not None:
             action = int(actions[agent_id])
@@ -132,7 +134,7 @@ def extract_pommerman_events(
                 action == STOP_ACTION
                 and not _is_immediate_bomb_threat(previous_observation, board_size)
             )
-            events[agent_id]["useful_bomb"] = float(
+            useful_bomb = (
                 action == BOMB_ACTION
                 and _is_useful_bomb_action(
                     previous_observation,
@@ -142,6 +144,8 @@ def extract_pommerman_events(
                     mode,
                 )
             )
+            events[agent_id]["useful_bomb"] = float(useful_bomb)
+            events[agent_id]["wasted_bomb"] = float(action == BOMB_ACTION and not useful_bomb)
     return events, alive_after
 
 
@@ -173,6 +177,7 @@ def shape_pommerman_rewards(
             - STEP_PENALTY
             - SAFE_STOP_PENALTY * event.get("safe_stop", 0.0)
             + USEFUL_BOMB_REWARD * event.get("useful_bomb", 0.0)
+            - WASTED_BOMB_PENALTY * event.get("wasted_bomb", 0.0)
         )
         if not (terminated[agent_id] or truncated[agent_id]):
             shaped[agent_id] += 0.0 * reward

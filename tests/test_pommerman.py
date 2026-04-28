@@ -165,7 +165,37 @@ def test_shaped_rewards_encourage_useful_bombs() -> None:
     shaped = shape_pommerman_rewards(raw_rewards, events, terminated, truncated, reward_preset="shaped")
 
     assert events["agent_0"]["useful_bomb"] == 1.0
+    assert events["agent_0"]["wasted_bomb"] == 0.0
     assert shaped["agent_0"] > 0.0
+
+
+def test_shaped_rewards_penalize_wasted_bombs() -> None:
+    board = np.zeros((11, 11), dtype=np.int64)
+    board[5, 5] = 10
+    previous = {
+        f"agent_{idx}": make_observation(idx, board=board, position=(5, 5) if idx == 0 else (idx, idx))
+        for idx in range(4)
+    }
+    raw_rewards = {agent_id: 0.0 for agent_id in previous}
+    terminated = {agent_id: False for agent_id in previous}
+    truncated = {agent_id: False for agent_id in previous}
+    events, _ = extract_pommerman_events(
+        previous,
+        previous,
+        raw_rewards,
+        terminated,
+        truncated,
+        agent_ids=tuple(previous),
+        board_size=11,
+        mode="ffa",
+        actions={agent_id: 5 if agent_id == "agent_0" else 0 for agent_id in previous},
+    )
+
+    shaped = shape_pommerman_rewards(raw_rewards, events, terminated, truncated, reward_preset="shaped")
+
+    assert events["agent_0"]["useful_bomb"] == 0.0
+    assert events["agent_0"]["wasted_bomb"] == 1.0
+    assert shaped["agent_0"] < -0.001
 
 
 def test_pommerman_env_adapter_reset_and_step() -> None:

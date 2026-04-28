@@ -564,6 +564,7 @@ class DreamerCollector:
         actions = []
         safe_stop_rates = []
         useful_bomb_rates = []
+        wasted_bomb_rates = []
         tie_rates = []
         for agent_id in self.controlled_agent_ids:
             agent_batch = batch.agents[agent_id]
@@ -572,6 +573,8 @@ class DreamerCollector:
                 safe_stop_rates.append(float(agent_batch.events["safe_stop"].mean()))
             if "useful_bomb" in agent_batch.events:
                 useful_bomb_rates.append(float(agent_batch.events["useful_bomb"].mean()))
+            if "wasted_bomb" in agent_batch.events:
+                wasted_bomb_rates.append(float(agent_batch.events["wasted_bomb"].mean()))
             if "tied" in agent_batch.events:
                 tie_rates.append(float(agent_batch.events["tied"].mean()))
         if actions:
@@ -581,6 +584,7 @@ class DreamerCollector:
         metrics = {
             "behavior_safe_stop_rate": float(np.mean(safe_stop_rates)) if safe_stop_rates else 0.0,
             "behavior_useful_bomb_rate": float(np.mean(useful_bomb_rates)) if useful_bomb_rates else 0.0,
+            "behavior_wasted_bomb_rate": float(np.mean(wasted_bomb_rates)) if wasted_bomb_rates else 0.0,
             "behavior_tie_rate": float(np.mean(tie_rates)) if tie_rates else 0.0,
         }
         for action in range(self.env.action_dim):

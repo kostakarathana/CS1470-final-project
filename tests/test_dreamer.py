@@ -83,6 +83,7 @@ def test_policy_warmup_skips_actor_critic_updates(tmp_path: Path) -> None:
     assert metrics["critic_loss"] == 0.0
     assert "behavior_action_0_rate" in metrics
     assert "behavior_safe_stop_rate" in metrics
+    assert "behavior_wasted_bomb_rate" in metrics
     env.close()
 
 
