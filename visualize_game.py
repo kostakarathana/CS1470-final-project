@@ -25,6 +25,7 @@ from PIL import Image, ImageDraw
 from madreamer.builders import ModuleBundle, build_modules, move_bundle_to_device
 from madreamer.config import load_experiment_config
 from madreamer.envs.factory import build_env
+from madreamer.envs.pommerman import POMMERMAN_ACTION_DIM, pommerman_action_mask_from_encoded
 from madreamer.models.world_model import RSSMState
 from madreamer.opponents import FixedOpponentManager
 from madreamer.replay import build_opponent_context
@@ -86,6 +87,7 @@ class PolicyController:
                 actor_output = self.bundle.actors[agent_id].act(
                     observed.posterior_state.features,
                     deterministic=True,
+                    action_mask=self._action_mask_tensor(observations, infos, agent_id),
                 )
                 actions[agent_id] = int(actor_output.action.item())
         return actions
@@ -107,6 +109,27 @@ class PolicyController:
         if self.bundle is None or self.cfg.algorithm.name == "ppo" or agent_id not in self.bundle.world_models:
             return 0
         return self.bundle.world_models[agent_id].opponent_action_dim
+
+    def _action_mask_tensor(
+        self,
+        observations: dict[str, np.ndarray],
+        infos: dict[str, dict[str, object]],
+        agent_id: str,
+    ) -> torch.Tensor | None:
+        if self.cfg.env.name != "pommerman" or self.env.action_dim != POMMERMAN_ACTION_DIM:
+            return None
+        info = infos.get(agent_id, {})
+        mask = info.get("action_mask")
+        if mask is None:
+            mask = pommerman_action_mask_from_encoded(
+                observations[agent_id],
+                board_value_count=self.cfg.env.board_value_count,
+                action_dim=self.env.action_dim,
+            )
+        mask_array = np.asarray(mask, dtype=np.float32)
+        if mask_array.shape != (self.env.action_dim,):
+            return None
+        return torch.as_tensor(mask_array[None], device=self.device, dtype=torch.bool)
 
 
 def build_policy_controller(env: Any, cfg: Any, checkpoint: Path | None) -> PolicyController:

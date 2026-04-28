@@ -10,6 +10,8 @@ from madreamer.envs.pommerman import (
     PommermanEnv,
     encode_pommerman_observation,
     extract_pommerman_events,
+    pommerman_action_mask,
+    pommerman_action_mask_from_encoded,
     shape_pommerman_rewards,
 )
 
@@ -32,6 +34,54 @@ def test_encode_pommerman_observation_shapes_and_scalars() -> None:
     assert encoded[16, 1, 1] == 1.0
     assert np.allclose(encoded[17], 0.2)
     assert np.allclose(encoded[18], 0.3)
+
+
+def test_action_mask_blocks_obviously_invalid_pommerman_actions() -> None:
+    board = np.zeros((11, 11), dtype=np.int64)
+    board[1, 1] = 10
+    board[0, 1] = 1
+    board[1, 0] = 2
+    board[1, 2] = 11
+    observation = make_observation(0, board=board, position=(1, 1), ammo=0)
+
+    mask = pommerman_action_mask(observation, board_size=11)
+
+    assert mask.tolist() == [1.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+
+
+def test_action_mask_allows_powerups_bombs_and_kickable_bombs() -> None:
+    board = np.zeros((11, 11), dtype=np.int64)
+    board[5, 5] = 10
+    board[5, 6] = 6
+    board[4, 5] = 3
+    observation = make_observation(0, board=board, position=(5, 5), ammo=1, can_kick=1)
+    observation["bomb_life"][4, 5] = 3.0
+
+    mask = pommerman_action_mask(observation, board_size=11)
+
+    assert mask[0] == 1.0
+    assert mask[1] == 1.0
+    assert mask[4] == 1.0
+    assert mask[5] == 1.0
+
+
+def test_action_mask_can_be_recovered_from_encoded_observation() -> None:
+    board = np.zeros((11, 11), dtype=np.int64)
+    board[1, 1] = 10
+    board[0, 1] = 1
+    observation = make_observation(0, board=board, position=(1, 1), ammo=0)
+    encoded = encode_pommerman_observation(
+        observation,
+        board_size=11,
+        board_value_count=14,
+        communication=False,
+    )
+
+    mask = pommerman_action_mask_from_encoded(encoded, board_value_count=14)
+
+    assert mask[0] == 1.0
+    assert mask[1] == 0.0
+    assert mask[5] == 0.0
 
 
 def test_extract_events_and_shaped_rewards() -> None:
@@ -272,10 +322,12 @@ def test_pommerman_env_adapter_reset_and_step() -> None:
     observations = env.reset(seed=123)
     assert set(observations) == {"agent_0", "agent_1", "agent_2", "agent_3"}
     assert observations["agent_0"].shape == (20, 11, 11)
+    assert "action_mask" in env.last_infos["agent_0"]
 
     step = env.step({agent_id: 0 for agent_id in env.agent_ids})
     assert step.rewards["agent_0"] >= 0.0
     assert "raw_observation" in step.infos["agent_0"]
+    assert "action_mask" in step.infos["agent_0"]
     assert "wood_destroyed" in step.events["agent_0"]
 
 

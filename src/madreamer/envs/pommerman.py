@@ -16,13 +16,22 @@ from madreamer.envs.base import ActionDict, EventDict, InfoDict, ObservationDict
 
 RIGID_TILE = 1
 WOOD_TILE = 2
+BOMB_TILE = 3
 FLAME_TILE = 4
+FOG_TILE = 5
 POWERUP_TILES = {6, 7, 8}
+PASSABLE_TILES = {0, FOG_TILE, *POWERUP_TILES}
 AGENT_BOARD_BASE = 10
 POMMERMAN_ACTION_DIM = 6
 STOP_ACTION = 0
 BOMB_ACTION = 5
 MOVE_ACTIONS = {1, 2, 3, 4}
+MOVE_DELTAS = {
+    1: (-1, 0),
+    2: (1, 0),
+    3: (0, -1),
+    4: (0, 1),
+}
 STEP_PENALTY = 0.001
 SAFE_STOP_PENALTY = 0.01
 BLOCKED_MOVE_PENALTY = 0.02
@@ -83,6 +92,55 @@ def encode_pommerman_observation(
             ]
         )
     return np.concatenate(feature_planes, axis=0).astype(np.float32, copy=False)
+
+
+def pommerman_action_mask(
+    observation: Mapping[str, Any],
+    *,
+    board_size: int,
+    action_dim: int = POMMERMAN_ACTION_DIM,
+) -> np.ndarray:
+    board = _coerce_board(observation["board"], board_size).astype(np.int64, copy=False)
+    bomb_life = _coerce_board(
+        observation.get("bomb_life", np.zeros_like(board)),
+        board_size,
+    ).astype(np.float32, copy=False)
+    position = tuple(int(value) for value in observation["position"])
+    ammo = float(observation.get("ammo", 0))
+    can_kick = bool(observation.get("can_kick", 0))
+    return _action_mask_from_arrays(
+        board,
+        bomb_life,
+        position,
+        ammo=ammo,
+        can_kick=can_kick,
+        action_dim=action_dim,
+    )
+
+
+def pommerman_action_mask_from_encoded(
+    observation: np.ndarray,
+    *,
+    board_value_count: int,
+    action_dim: int = POMMERMAN_ACTION_DIM,
+) -> np.ndarray:
+    encoded = np.asarray(observation)
+    if encoded.ndim != 3 or encoded.shape[0] < board_value_count + 6:
+        return np.ones(action_dim, dtype=np.float32)
+    board = encoded[:board_value_count].argmax(axis=0).astype(np.int64, copy=False)
+    bomb_life = encoded[board_value_count + 1] * 10.0
+    position_flat = int(encoded[board_value_count + 2].reshape(-1).argmax())
+    position = tuple(int(value) for value in np.unravel_index(position_flat, board.shape))
+    ammo = float(encoded[board_value_count + 3].mean() * 10.0)
+    can_kick = bool(encoded[board_value_count + 5].mean() >= 0.5)
+    return _action_mask_from_arrays(
+        board,
+        bomb_life,
+        position,
+        ammo=ammo,
+        can_kick=can_kick,
+        action_dim=action_dim,
+    )
 
 
 def extract_pommerman_events(
@@ -244,6 +302,11 @@ class PommermanEnv:
         for agent_id in self.agent_ids:
             self.last_infos.setdefault(agent_id, {})
             self.last_infos[agent_id]["raw_observation"] = normalized_raw_observations[agent_id]
+            self.last_infos[agent_id]["action_mask"] = pommerman_action_mask(
+                normalized_raw_observations[agent_id],
+                board_size=self.board_size,
+                action_dim=self.action_dim,
+            )
         return observations
 
     def step(self, actions: ActionDict) -> StepResult:
@@ -288,6 +351,11 @@ class PommermanEnv:
         for agent_id in self.agent_ids:
             info_by_agent[agent_id]["raw_observation"] = raw_observations[agent_id]
             info_by_agent[agent_id]["alive"] = alive[agent_id]
+            info_by_agent[agent_id]["action_mask"] = pommerman_action_mask(
+                raw_observations[agent_id],
+                board_size=self.board_size,
+                action_dim=self.action_dim,
+            )
         self.last_infos = info_by_agent
         self._last_raw_observations = raw_observations
         return StepResult(
@@ -440,6 +508,63 @@ def _position_plane(position: tuple[int, int], board_size: int) -> np.ndarray:
     row, col = position
     plane[int(row), int(col)] = 1.0
     return plane
+
+
+def _action_mask_from_arrays(
+    board: np.ndarray,
+    bomb_life: np.ndarray,
+    position: tuple[int, int],
+    *,
+    ammo: float,
+    can_kick: bool,
+    action_dim: int,
+) -> np.ndarray:
+    mask = np.zeros(action_dim, dtype=np.float32)
+    if action_dim <= 0:
+        return mask
+    mask[STOP_ACTION] = 1.0
+    for action, delta in MOVE_DELTAS.items():
+        if action >= action_dim:
+            continue
+        target = (position[0] + delta[0], position[1] + delta[1])
+        if _valid_move_target(board, bomb_life, target, delta=delta, can_kick=can_kick):
+            mask[action] = 1.0
+    if BOMB_ACTION < action_dim and ammo > 0.0 and bomb_life[position] <= 0.0:
+        mask[BOMB_ACTION] = 1.0
+    if not mask.any():
+        mask[STOP_ACTION] = 1.0
+    return mask
+
+
+def _valid_move_target(
+    board: np.ndarray,
+    bomb_life: np.ndarray,
+    target: tuple[int, int],
+    *,
+    delta: tuple[int, int],
+    can_kick: bool,
+) -> bool:
+    if not _in_bounds(board, target):
+        return False
+    tile = int(board[target])
+    has_bomb = tile == BOMB_TILE or float(bomb_life[target]) > 0.0
+    if has_bomb:
+        return can_kick and _kick_destination_is_clear(board, bomb_life, target, delta)
+    return tile in PASSABLE_TILES
+
+
+def _kick_destination_is_clear(
+    board: np.ndarray,
+    bomb_life: np.ndarray,
+    bomb_position: tuple[int, int],
+    delta: tuple[int, int],
+) -> bool:
+    target = (bomb_position[0] + delta[0], bomb_position[1] + delta[1])
+    return (
+        _in_bounds(board, target)
+        and int(board[target]) in PASSABLE_TILES
+        and float(bomb_life[target]) <= 0.0
+    )
 
 
 def _is_useful_bomb_action(

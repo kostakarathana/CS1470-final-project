@@ -6,7 +6,8 @@ import torch
 from madreamer.builders import build_modules
 from madreamer.config import load_experiment_config
 from madreamer.envs.factory import build_env
-from madreamer.models.world_model import extract_observation_targets
+from madreamer.models.policy import ActorNetwork
+from madreamer.models.world_model import RSSMState, extract_observation_targets
 from madreamer.replay import MultiAgentReplayBuffer
 from madreamer.rollout import collect_episode
 from madreamer.trainers.dreamer import DreamerCollector
@@ -157,6 +158,67 @@ def test_free_nats_applies_per_sample_before_averaging() -> None:
     loss = DreamerCollector._apply_free_nats(kl_values, free_nats=0.5)
 
     assert torch.allclose(loss, torch.tensor(0.75))
+
+
+def test_actor_network_respects_action_mask() -> None:
+    actor = ActorNetwork(input_dim=3, hidden_dim=4, action_dim=3)
+    for parameter in actor.parameters():
+        parameter.data.zero_()
+    actor.net[-1].bias.data = torch.tensor([0.0, 1.0, 2.0])
+    features = torch.zeros(1, 3)
+
+    output = actor.act(
+        features,
+        deterministic=True,
+        action_mask=torch.tensor([[1, 1, 0]], dtype=torch.bool),
+    )
+
+    assert output.action.item() == 1
+    assert output.logits[0, 2] < -1e30
+
+
+def test_dreamer_imagined_action_mask_uses_decoded_board_and_position(tmp_path: Path) -> None:
+    config_path = Path(__file__).resolve().parents[1] / "configs" / "shared_smoke.yaml"
+    cfg = load_experiment_config(config_path)
+    cfg.training.log_dir = str(tmp_path / "logs")
+    cfg.training.checkpoint_dir = str(tmp_path / "checkpoints")
+    env = build_env(cfg, pommerman_backend_factory=fake_backend_factory("ffa"))
+    bundle = build_modules(cfg, env.agent_ids, env.observation_shape, env.action_dim, cfg.env.board_value_count)
+    replay = MultiAgentReplayBuffer(capacity=128)
+    trainer = DreamerCollector(env, bundle, cfg, replay)
+
+    class DummyWorldModel:
+        obs_shape = env.observation_shape
+        board_value_count = cfg.env.board_value_count
+
+        def decode(self, state: RSSMState):
+            batch_size = state.deter.shape[0]
+            board_logits = torch.zeros(batch_size, cfg.env.board_value_count, 11, 11)
+            board_logits[:, 1, 1, 0] = 10.0
+            feature_prediction = torch.zeros(batch_size, 6, 11, 11)
+            feature_prediction[:, 2, 1, 1] = 1.0
+            return (
+                torch.zeros(batch_size),
+                torch.zeros(batch_size),
+                board_logits,
+                feature_prediction,
+            )
+
+    state = RSSMState(
+        deter=torch.zeros(1, cfg.algorithm.dreamer.hidden_dim),
+        stoch=torch.zeros(1, cfg.algorithm.dreamer.latent_dim),
+        mean=torch.zeros(1, cfg.algorithm.dreamer.latent_dim),
+        std=torch.ones(1, cfg.algorithm.dreamer.latent_dim),
+    )
+
+    mask = trainer._imagined_action_mask(DummyWorldModel(), state)
+
+    assert mask is not None
+    assert mask[0, 0]
+    assert mask[0, 2]
+    assert not mask[0, 3]
+    assert not mask[0, 5]
+    env.close()
 
 
 def test_dreamer_eval_comparison_prioritizes_win_rate(tmp_path: Path) -> None:

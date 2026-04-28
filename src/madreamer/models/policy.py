@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import torch
 from torch import Tensor, nn
 from torch.distributions import Categorical
 
@@ -36,11 +37,11 @@ class ActorNetwork(nn.Module):
     def forward(self, features: Tensor) -> Tensor:
         return self.net(features)
 
-    def distribution(self, features: Tensor) -> Categorical:
-        return Categorical(logits=self(features))
+    def distribution(self, features: Tensor, action_mask: Tensor | None = None) -> Categorical:
+        return Categorical(logits=self._masked_logits(self(features), action_mask))
 
-    def act(self, features: Tensor, *, deterministic: bool = False) -> ActorOutput:
-        logits = self(features)
+    def act(self, features: Tensor, *, deterministic: bool = False, action_mask: Tensor | None = None) -> ActorOutput:
+        logits = self._masked_logits(self(features), action_mask)
         distribution = Categorical(logits=logits)
         action = logits.argmax(dim=-1) if deterministic else distribution.sample()
         return ActorOutput(
@@ -49,6 +50,19 @@ class ActorNetwork(nn.Module):
             entropy=distribution.entropy(),
             logits=logits,
         )
+
+    @staticmethod
+    def _masked_logits(logits: Tensor, action_mask: Tensor | None) -> Tensor:
+        if action_mask is None:
+            return logits
+        mask = action_mask.to(device=logits.device, dtype=torch.bool)
+        if mask.ndim == 1:
+            mask = mask.unsqueeze(0).expand_as(logits)
+        else:
+            mask = torch.broadcast_to(mask, logits.shape)
+        has_valid_action = mask.any(dim=-1, keepdim=True)
+        safe_mask = torch.where(has_valid_action, mask, torch.ones_like(mask))
+        return logits.masked_fill(~safe_mask, torch.finfo(logits.dtype).min)
 
 
 class CriticNetwork(nn.Module):

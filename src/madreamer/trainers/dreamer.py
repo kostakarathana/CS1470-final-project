@@ -13,6 +13,14 @@ import torch.nn.functional as F
 from madreamer.builders import ModuleBundle
 from madreamer.config import ExperimentConfig
 from madreamer.envs.base import MultiAgentEnv
+from madreamer.envs.pommerman import (
+    BOMB_ACTION,
+    BOMB_TILE,
+    MOVE_DELTAS,
+    PASSABLE_TILES,
+    POMMERMAN_ACTION_DIM,
+    pommerman_action_mask_from_encoded,
+)
 from madreamer.models.world_model import RSSMState, extract_observation_targets, kl_divergence
 from madreamer.opponents import FixedOpponentManager
 from madreamer.replay import MultiAgentReplayBuffer, ReplayStep, build_opponent_context
@@ -126,6 +134,7 @@ class DreamerCollector:
                     actor_output = self.bundle.actors[agent_id].act(
                         model_output.posterior_state.features,
                         deterministic=False,
+                        action_mask=self._real_action_mask_tensor(observations, infos, agent_id),
                     )
                 actions[agent_id] = int(actor_output.action.item())
 
@@ -275,6 +284,7 @@ class DreamerCollector:
                         actor_output = self.bundle.actors[agent_id].act(
                             model_output.posterior_state.features,
                             deterministic=True,
+                            action_mask=self._real_action_mask_tensor(observations, infos, agent_id),
                         )
                     actions[agent_id] = int(actor_output.action.item())
                 step = self.env.step(actions)
@@ -556,7 +566,8 @@ class DreamerCollector:
         imagined_actions: list[Tensor] = []
         for _ in range(self.cfg.algorithm.dreamer.imagination_horizon):
             features = state.features
-            actor_output = actor.act(features, deterministic=False)
+            action_mask = self._imagined_action_mask(world_model, state)
+            actor_output = actor.act(features, deterministic=False, action_mask=action_mask)
             values.append(critic(features))
             with torch.no_grad():
                 target_values.append(target_critic(features))
@@ -594,6 +605,95 @@ class DreamerCollector:
             for action in range(self.env.action_dim):
                 metrics[f"imagined_action_{action}_rate"] = float((action_tensor == action).float().mean().item())
         return actor_loss / scale, critic_loss / scale, metrics
+
+    def _real_action_mask_tensor(
+        self,
+        observations: dict[str, np.ndarray],
+        infos: dict[str, dict[str, object]],
+        agent_id: str,
+    ) -> Tensor | None:
+        if self.cfg.env.name != "pommerman" or self.env.action_dim != POMMERMAN_ACTION_DIM:
+            return None
+        info = infos.get(agent_id, {})
+        mask = info.get("action_mask")
+        if mask is None:
+            mask = pommerman_action_mask_from_encoded(
+                observations[agent_id],
+                board_value_count=self.cfg.env.board_value_count,
+                action_dim=self.env.action_dim,
+            )
+        mask_array = np.asarray(mask, dtype=np.float32)
+        if mask_array.shape != (self.env.action_dim,):
+            return None
+        return torch.as_tensor(mask_array[None], device=self.device, dtype=torch.bool)
+
+    def _imagined_action_mask(self, world_model: Any, state: RSSMState) -> Tensor | None:
+        if (
+            self.cfg.env.name != "pommerman"
+            or self.env.action_dim != POMMERMAN_ACTION_DIM
+            or world_model.obs_shape[0] < world_model.board_value_count + 6
+        ):
+            return None
+        with torch.no_grad():
+            _, _, board_logits, feature_prediction = world_model.decode(state)
+            board = board_logits.argmax(dim=1)
+            bomb_life = feature_prediction[:, 1] * 10.0
+            batch_size, height, width = board.shape
+            positions = feature_prediction[:, 2].reshape(batch_size, -1).argmax(dim=1)
+            rows = torch.div(positions, width, rounding_mode="floor")
+            cols = positions.remainder(width)
+            mask = torch.zeros(batch_size, self.env.action_dim, device=self.device, dtype=torch.bool)
+            mask[:, 0] = True
+            can_kick = feature_prediction[:, 5].reshape(batch_size, -1).mean(dim=1) >= 0.5
+            indices = torch.arange(batch_size, device=self.device)
+            for action, (delta_row, delta_col) in MOVE_DELTAS.items():
+                if action >= self.env.action_dim:
+                    continue
+                target_rows = rows + delta_row
+                target_cols = cols + delta_col
+                in_bounds = (
+                    (target_rows >= 0)
+                    & (target_rows < height)
+                    & (target_cols >= 0)
+                    & (target_cols < width)
+                )
+                clamped_rows = target_rows.clamp(0, height - 1)
+                clamped_cols = target_cols.clamp(0, width - 1)
+                target_tiles = board[indices, clamped_rows, clamped_cols]
+                target_has_bomb = (target_tiles == BOMB_TILE) | (bomb_life[indices, clamped_rows, clamped_cols] > 0.05)
+                target_passable = self._tile_in(target_tiles, PASSABLE_TILES)
+                kick_rows = target_rows + delta_row
+                kick_cols = target_cols + delta_col
+                kick_in_bounds = (
+                    (kick_rows >= 0)
+                    & (kick_rows < height)
+                    & (kick_cols >= 0)
+                    & (kick_cols < width)
+                )
+                clamped_kick_rows = kick_rows.clamp(0, height - 1)
+                clamped_kick_cols = kick_cols.clamp(0, width - 1)
+                kick_tiles = board[indices, clamped_kick_rows, clamped_kick_cols]
+                kick_clear = (
+                    kick_in_bounds
+                    & self._tile_in(kick_tiles, PASSABLE_TILES)
+                    & (bomb_life[indices, clamped_kick_rows, clamped_kick_cols] <= 0.05)
+                )
+                mask[:, action] = in_bounds & (
+                    (~target_has_bomb & target_passable)
+                    | (target_has_bomb & can_kick & kick_clear)
+                )
+            if BOMB_ACTION < self.env.action_dim:
+                ammo = feature_prediction[:, 3].reshape(batch_size, -1).mean(dim=1) * 10.0
+                current_bomb = bomb_life[indices, rows, cols] > 0.05
+                mask[:, BOMB_ACTION] = (ammo > 0.05) & ~current_bomb
+            return mask
+
+    @staticmethod
+    def _tile_in(tiles: Tensor, values: set[int]) -> Tensor:
+        result = torch.zeros_like(tiles, dtype=torch.bool)
+        for value in values:
+            result = result | (tiles == value)
+        return result
 
     @staticmethod
     def _apply_free_nats(kl_values: Tensor, free_nats: float) -> Tensor:
