@@ -394,6 +394,8 @@ class PommermanEnv:
 
 
 def _default_pommerman_backend(env_id: str, num_agents: int) -> PommermanBackend:
+    _install_pkg_resources_stub()
+    _install_click_stub()
     _install_rapidjson_stub()
     _install_pommerman_headless_stubs()
     _add_pommerman_source_paths()
@@ -425,6 +427,71 @@ def _add_pommerman_source_paths() -> None:
     for source_path in search_roots:
         if source_path.exists() and str(source_path) not in sys.path:
             sys.path.insert(0, str(source_path))
+
+
+def _install_pkg_resources_stub() -> None:
+    """Stub out pkg_resources — gym 0.10 uses it lazily; not needed for headless training."""
+    if "pkg_resources" in sys.modules:
+        return
+    try:
+        import pkg_resources as _existing  # noqa: F401
+        return
+    except ImportError:
+        pass
+    module = types.ModuleType("pkg_resources")
+    module.require = lambda *a, **k: None
+    module.get_distribution = lambda name: types.SimpleNamespace(
+        version="0.0.0", project_name=name
+    )
+    module.DistributionNotFound = Exception
+    module.VersionConflict = Exception
+    module.parse_version = lambda v: v
+
+    class _EntryPoint:
+        """Minimal EntryPoint implementation for gym's environment loader."""
+
+        def __init__(self, name: str, module_name: str, attrs: tuple) -> None:
+            self.name = name
+            self.module_name = module_name
+            self.attrs = attrs
+
+        @classmethod
+        def parse(cls, src: str) -> "_EntryPoint":
+            name, _, rest = src.partition("=")
+            rest = rest.strip()
+            if ":" in rest:
+                module_name, _, attr_str = rest.partition(":")
+                attrs = tuple(attr_str.strip().split("."))
+            else:
+                module_name, attrs = rest, ()
+            return cls(name.strip(), module_name.strip(), attrs)
+
+        def load(self) -> object:
+            import importlib
+            mod = importlib.import_module(self.module_name)
+            obj: object = mod
+            for attr in self.attrs:
+                obj = getattr(obj, attr)
+            return obj
+
+        def resolve(self) -> object:
+            return self.load()
+
+    module.EntryPoint = _EntryPoint
+    sys.modules["pkg_resources"] = module
+
+
+def _install_click_stub() -> None:
+    """Stub out the 'click' package used by player_agent_blocking — not needed for headless training."""
+    if "click" in sys.modules:
+        return
+    module = types.ModuleType("click")
+    module.command = lambda *a, **k: (lambda f: f)
+    module.option = lambda *a, **k: (lambda f: f)
+    module.argument = lambda *a, **k: (lambda f: f)
+    module.echo = lambda *a, **k: None
+    module.group = lambda *a, **k: (lambda f: f)
+    sys.modules["click"] = module
 
 
 def _install_rapidjson_stub() -> None:

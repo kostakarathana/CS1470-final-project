@@ -64,16 +64,18 @@ def load_metrics(log_dir: Path) -> tuple[list[int], list[float], list[float], in
 
 
 def main():
-    artifacts_dir = Path("artifacts/final")
+    artifacts_dir = Path("artifacts/oscar")
     output_dirs = [Path("artifacts"), Path("results")]
 
     experiments = {
         "PPO": artifacts_dir / "ppo-ffa" / "logs",
+        "PPO Long (262k)": artifacts_dir / "ppo-long-ffa" / "logs",
         "Independent (h=3)": artifacts_dir / "independent-h3-ffa" / "logs",
         "Shared (h=1)": artifacts_dir / "shared-h1-ffa" / "logs",
         "Shared (h=3)": artifacts_dir / "shared-h3-ffa" / "logs",
         "Shared (h=5)": artifacts_dir / "shared-h5-ffa" / "logs",
         "Opponent-Aware (h=3)": artifacts_dir / "opponent-aware-h3-ffa" / "logs",
+        "Opponent-Aware Stable (h=3)": artifacts_dir / "opponent-aware-stable-h3-ffa" / "logs",
         "Team (h=3)": artifacts_dir / "team-shared-h3" / "logs",
     }
 

@@ -1,0 +1,43 @@
+seed: 7
+experiment_name: "oscar-independent-h3-ffa"
+env:
+  name: "pommerman"
+  mode: "ffa"
+  num_agents: 4
+  max_steps: 256
+  board_size: 11
+  observability: "full"
+  communication: false
+  board_value_count: 14
+algorithm:
+  name: "independent"
+  learner_setup: "multi_learner"
+  opponent_policy: "simple"
+  reward_preset: "shaped"
+  dreamer:
+    latent_dim: 64
+    hidden_dim: 256
+    encoder_channels: 64
+    sequence_length: 16
+    replay_capacity: 16384
+    batch_size: 24
+    warmup_steps: 1024
+    policy_warmup_steps: 4096
+    updates_per_collect: 4
+    train_every_steps: 4
+    model_learning_rate: 0.0005
+    actor_learning_rate: 0.0001
+    critic_learning_rate: 0.0001
+    imagination_horizon: 3
+    kl_scale: 0.2
+    free_nats: 0.1
+    board_class_balance: 0.5
+    entropy_coef: 0.005
+training:
+  total_steps: 32768
+  eval_interval_steps: 2048
+  eval_episodes: 16
+  save_interval_steps: 4096
+  device: "cuda"
+  log_dir: "artifacts/oscar/independent-h3-ffa/logs"
+  checkpoint_dir: "artifacts/oscar/independent-h3-ffa/checkpoints"
