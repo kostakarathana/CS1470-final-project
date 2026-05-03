@@ -13,7 +13,7 @@ PyTorch research code for comparing a PPO baseline with Dreamer-style world-mode
 - `visualize_game.py`, `visualize_imagination.py`, `compare_strategies.py`, `diagnose_policy_behavior.py`: qualitative analysis and debugging tools.
 - `scripts/`: setup, validation, final-matrix, poster, and Oscar submission scripts.
 - `results/`: committed submission outputs, including final plots, summary tables, eval-only logs, poster figures, and gameplay frames.
-- `deliverables/`: final paper PDF, poster PDF, and gameplay preview GIF.
+- `paper.pdf` and `poster.pdf`: final written deliverables.
 - `docs/`: supporting runbook, visualization guide, and Pommerman background notes.
 - `third_party/pommerman/`: bundled Pommerman runtime used by the environment adapter.
 
@@ -62,8 +62,8 @@ The main submitted outputs are:
 - `results/final_summary.csv`
 - `results/final_results.png`
 - `results/poster_figures/pommerman_results_summary.png`
-- `deliverables/paper.pdf`
-- `deliverables/final-poster.pdf`
+- `paper.pdf`
+- `poster.pdf`
 
 ## Running Experiments
 
