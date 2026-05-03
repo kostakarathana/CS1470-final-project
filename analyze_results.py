@@ -78,6 +78,11 @@ def main():
         "Opponent-Aware Stable (h=3)": artifacts_dir / "opponent-aware-stable-h3-ffa" / "logs",
         "Team (h=3)": artifacts_dir / "team-shared-h3" / "logs",
     }
+    plot_experiments = {
+        name
+        for name in experiments
+        if name != "Team (h=3)"
+    }
 
     print("=" * 70)
     print("FINAL EXPERIMENT ANALYSIS")
@@ -123,7 +128,7 @@ def main():
     # Plot 1: Reward curves
     ax = axes[0]
     for name, data in all_data.items():
-        if data["rewards"]:
+        if name in plot_experiments and data["rewards"]:
             ax.plot(data["env_steps"], data["rewards"], label=name, marker="o", alpha=0.7)
     ax.set_xlabel("Environment Steps")
     ax.set_ylabel("Eval Mean Reward")
@@ -134,7 +139,7 @@ def main():
     # Plot 2: Win rate curves
     ax = axes[1]
     for name, data in all_data.items():
-        if data["win_rates"]:
+        if name in plot_experiments and data["win_rates"]:
             ax.plot(data["env_steps"], data["win_rates"], label=name, marker="s", alpha=0.7)
     ax.set_xlabel("Environment Steps")
     ax.set_ylabel("Eval Win Rate")
