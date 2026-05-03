@@ -1,5 +1,7 @@
 # CS1470 Final Project
 
+At a high level, this project asks whether model-based reinforcement learning can help in a multiplayer setting where the world is changing because other agents are acting too. We use Pommerman, a four-agent grid game with bombs, walls, powerups, and sparse win/loss outcomes, as a compact testbed for comparing a standard model-free learner against agents that learn an internal model of the game and plan through imagined futures.
+
 PyTorch research code for comparing a PPO baseline with Dreamer-style world-model agents in Pommerman. The project focuses on whether learned dynamics models remain useful when other agents make the environment non-stationary.
 
 ## What Is Here
@@ -11,7 +13,7 @@ PyTorch research code for comparing a PPO baseline with Dreamer-style world-mode
 - `visualize_game.py`, `visualize_imagination.py`, `compare_strategies.py`, `diagnose_policy_behavior.py`: qualitative analysis and debugging tools.
 - `scripts/`: setup, validation, final-matrix, poster, and Oscar submission scripts.
 - `results/`: committed submission outputs, including final plots, summary tables, eval-only logs, poster figures, and gameplay frames.
-- `deliverables/`: final poster PDF and gameplay preview GIF.
+- `deliverables/`: final paper PDF, poster PDF, and gameplay preview GIF.
 - `docs/`: supporting runbook, visualization guide, and Pommerman background notes.
 - `third_party/pommerman/`: bundled Pommerman runtime used by the environment adapter.
 
@@ -60,6 +62,7 @@ The main submitted outputs are:
 - `results/final_summary.csv`
 - `results/final_results.png`
 - `results/poster_figures/pommerman_results_summary.png`
+- `deliverables/paper.pdf`
 - `deliverables/final-poster.pdf`
 
 ## Running Experiments
