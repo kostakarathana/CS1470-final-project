@@ -1,0 +1,12 @@
+{"algorithm": "shared", "env_steps": 2048, "eval_episodes": 16.0, "eval_mean_reward": -1.8664531249999978, "eval_win_rate": 0.1875, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 4096, "eval_episodes": 16.0, "eval_mean_reward": -1.8473124999999992, "eval_win_rate": 0.0625, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 6144, "eval_episodes": 16.0, "eval_mean_reward": -3.029828125, "eval_win_rate": 0.0, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 8192, "eval_episodes": 16.0, "eval_mean_reward": -2.549124999999999, "eval_win_rate": 0.0, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 10240, "eval_episodes": 16.0, "eval_mean_reward": -1.721156249999997, "eval_win_rate": 0.0, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 12288, "eval_episodes": 16.0, "eval_mean_reward": -0.9425624999999982, "eval_win_rate": 0.0, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 14336, "eval_episodes": 16.0, "eval_mean_reward": -0.7850624999999999, "eval_win_rate": 0.0, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 16384, "eval_episodes": 16.0, "eval_mean_reward": -1.308656249999998, "eval_win_rate": 0.0, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 18432, "eval_episodes": 16.0, "eval_mean_reward": -1.035218749999999, "eval_win_rate": 0.0, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 20480, "eval_episodes": 16.0, "eval_mean_reward": -0.6302187499999999, "eval_win_rate": 0.0, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 22528, "eval_episodes": 16.0, "eval_mean_reward": -0.5915468750000002, "eval_win_rate": 0.0, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 24576, "eval_episodes": 16.0, "eval_mean_reward": -0.6024062499999997, "eval_win_rate": 0.0, "phase": "eval"}

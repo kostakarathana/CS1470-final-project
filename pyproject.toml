@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cs1470-multi-agent-dreamer"
 version = "0.1.0"
-description = "Scaffold for multi-agent Dreamer experiments in PyTorch."
+description = "PyTorch experiments comparing PPO and Dreamer-style agents in Pommerman."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

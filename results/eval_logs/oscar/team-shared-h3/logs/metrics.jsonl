@@ -1,0 +1,15 @@
+{"algorithm": "shared", "env_steps": 2048, "eval_episodes": 16.0, "eval_mean_reward": -0.6406718749999996, "eval_win_rate": 0.75, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 4096, "eval_episodes": 16.0, "eval_mean_reward": -1.1727343749999979, "eval_win_rate": 0.25, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 6144, "eval_episodes": 16.0, "eval_mean_reward": 0.22812500000000002, "eval_win_rate": 1.0, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 8192, "eval_episodes": 16.0, "eval_mean_reward": -1.828499999999996, "eval_win_rate": 0.0, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 10240, "eval_episodes": 16.0, "eval_mean_reward": 1.0489999999999997, "eval_win_rate": 0.0, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 12288, "eval_episodes": 16.0, "eval_mean_reward": 1.1944687500000013, "eval_win_rate": 0.8125, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 14336, "eval_episodes": 16.0, "eval_mean_reward": 1.5977968750000011, "eval_win_rate": 0.375, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 16384, "eval_episodes": 16.0, "eval_mean_reward": 2.920828124999999, "eval_win_rate": 0.375, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 18432, "eval_episodes": 16.0, "eval_mean_reward": 4.559531250000001, "eval_win_rate": 0.375, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 20480, "eval_episodes": 16.0, "eval_mean_reward": 3.160390625000001, "eval_win_rate": 0.875, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 22528, "eval_episodes": 16.0, "eval_mean_reward": 1.0024687500000002, "eval_win_rate": 1.0, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 24576, "eval_episodes": 16.0, "eval_mean_reward": 0.7346718750000001, "eval_win_rate": 1.0, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 26624, "eval_episodes": 16.0, "eval_mean_reward": 0.812921875, "eval_win_rate": 1.0, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 28672, "eval_episodes": 16.0, "eval_mean_reward": 0.9978593750000002, "eval_win_rate": 1.0, "phase": "eval"}
+{"algorithm": "shared", "env_steps": 30720, "eval_episodes": 16.0, "eval_mean_reward": 0.6505468750000003, "eval_win_rate": 1.0, "phase": "eval"}

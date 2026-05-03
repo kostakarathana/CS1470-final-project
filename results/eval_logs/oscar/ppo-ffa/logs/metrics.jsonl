@@ -1,0 +1,16 @@
+{"algorithm": "ppo", "env_steps": 2048, "eval_episodes": 16.0, "eval_mean_reward": -2.337249999999994, "eval_win_rate": 0.0625, "phase": "eval"}
+{"algorithm": "ppo", "env_steps": 4096, "eval_episodes": 16.0, "eval_mean_reward": -4.129249999999986, "eval_win_rate": 0.0, "phase": "eval"}
+{"algorithm": "ppo", "env_steps": 6144, "eval_episodes": 16.0, "eval_mean_reward": -3.6031874999999864, "eval_win_rate": 0.0, "phase": "eval"}
+{"algorithm": "ppo", "env_steps": 8192, "eval_episodes": 16.0, "eval_mean_reward": -3.5222499999999872, "eval_win_rate": 0.0625, "phase": "eval"}
+{"algorithm": "ppo", "env_steps": 10240, "eval_episodes": 16.0, "eval_mean_reward": -2.8674374999999896, "eval_win_rate": 0.0625, "phase": "eval"}
+{"algorithm": "ppo", "env_steps": 12288, "eval_episodes": 16.0, "eval_mean_reward": -2.249749999999996, "eval_win_rate": 0.0625, "phase": "eval"}
+{"algorithm": "ppo", "env_steps": 14336, "eval_episodes": 16.0, "eval_mean_reward": -3.1002499999999897, "eval_win_rate": 0.0625, "phase": "eval"}
+{"algorithm": "ppo", "env_steps": 16384, "eval_episodes": 16.0, "eval_mean_reward": -2.5266874999999933, "eval_win_rate": 0.0, "phase": "eval"}
+{"algorithm": "ppo", "env_steps": 18432, "eval_episodes": 16.0, "eval_mean_reward": -2.697937499999992, "eval_win_rate": 0.0625, "phase": "eval"}
+{"algorithm": "ppo", "env_steps": 20480, "eval_episodes": 16.0, "eval_mean_reward": -1.7178749999999985, "eval_win_rate": 0.0625, "phase": "eval"}
+{"algorithm": "ppo", "env_steps": 22528, "eval_episodes": 16.0, "eval_mean_reward": -1.6154374999999974, "eval_win_rate": 0.0625, "phase": "eval"}
+{"algorithm": "ppo", "env_steps": 24576, "eval_episodes": 16.0, "eval_mean_reward": -1.7779374999999962, "eval_win_rate": 0.0625, "phase": "eval"}
+{"algorithm": "ppo", "env_steps": 26624, "eval_episodes": 16.0, "eval_mean_reward": -2.5221249999999937, "eval_win_rate": 0.0, "phase": "eval"}
+{"algorithm": "ppo", "env_steps": 28672, "eval_episodes": 16.0, "eval_mean_reward": -1.3976249999999975, "eval_win_rate": 0.0625, "phase": "eval"}
+{"algorithm": "ppo", "env_steps": 30720, "eval_episodes": 16.0, "eval_mean_reward": -2.3094374999999943, "eval_win_rate": 0.0, "phase": "eval"}
+{"algorithm": "ppo", "env_steps": 32768, "eval_episodes": 16.0, "eval_mean_reward": -1.3629374999999984, "eval_win_rate": 0.0, "phase": "eval"}

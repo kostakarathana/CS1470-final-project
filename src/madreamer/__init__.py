@@ -1,4 +1,4 @@
-"""Multi-agent Dreamer research scaffold."""
+"""Multi-agent Dreamer and PPO experiments for Pommerman."""
 
 from madreamer.config import ExperimentConfig, load_experiment_config
 
